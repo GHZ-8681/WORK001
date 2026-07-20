@@ -4654,7 +4654,7 @@
                 </div>
                 <div class="form-group">
                     <label for="modelName">模型名称</label>
-                    <input type="text" id="modelName" placeholder="deepseek-v4-pro" value="deepseek-v4-pro">
+                    <input type="text" id="modelName" placeholder="deepseek-chat" value="deepseek-chat">
                 </div>
                 <div id="keyStatus" class="status-message"></div>
             </div>
@@ -5065,14 +5065,6 @@
                 return;
             }
 
-            if (window.location.hostname.endsWith('github.io')) {
-                showLoading();
-                setTimeout(() => updateLoadingCard('正在统计问题归因标签...', 55), 120);
-                setTimeout(() => updateLoadingCard('正在生成问题分类与案例...', 85), 260);
-                setTimeout(() => displayResult(parseAndAnalyze(csvData, '')), 420);
-                return;
-            }
-
             if (!apiKey || !apiKey.startsWith('sk-')) {
                 showError('请先配置有效的API密钥');
                 return;
@@ -5081,6 +5073,12 @@
             showAILoading();
 
             try {
+                if (window.location.hostname.endsWith('github.io')) {
+                    const result = await analyzeWithDirectAPI(csvData, apiKey);
+                    displayResult(calibrateAnalysisResult(result, csvData));
+                    return;
+                }
+
                 const result = await analyzeWithBackend(csvData, apiKey);
                 displayResult(calibrateAnalysisResult(result, csvData));
             } catch (backendError) {
@@ -5127,7 +5125,7 @@
 
         async function analyzeWithDirectAPI(csvData, apiKey, keyword = '') {
             const apiBaseUrl = document.getElementById('apiBaseUrl').value || 'https://api.deepseek.com/v1/chat/completions';
-            const modelName = document.getElementById('modelName').value || 'deepseek-v4-pro';
+            const modelName = document.getElementById('modelName').value.trim() || 'deepseek-chat';
 
             const prompt = buildPrompt(csvData, keyword);
             const response = await fetchWithTimeout(apiBaseUrl, {
@@ -8170,7 +8168,7 @@ ${keywordFilter}
         async function testKey() {
             const apiKey = document.getElementById('apiKey').value;
             const apiBaseUrl = document.getElementById('apiBaseUrl').value || 'https://api.deepseek.com/v1/chat/completions';
-            const modelName = document.getElementById('modelName').value || 'deepseek-v4-pro';
+            const modelName = document.getElementById('modelName').value.trim() || 'deepseek-chat';
             const statusDiv = document.getElementById('keyStatus');
 
             if (!apiKey || !apiKey.startsWith('sk-')) {
@@ -8222,8 +8220,25 @@ ${keywordFilter}
         }
 
         function saveKeyAndClose() {
+            const apiKey = document.getElementById('apiKey').value.trim();
+            const apiBaseUrl = document.getElementById('apiBaseUrl').value.trim();
+            const modelName = document.getElementById('modelName').value.trim();
+
+            if (!apiKey || !apiKey.startsWith('sk-')) {
+                const statusDiv = document.getElementById('keyStatus');
+                statusDiv.className = 'status-message error';
+                statusDiv.innerHTML = '请输入有效的 API 密钥后再保存';
+                return;
+            }
+
+            sessionStorage.setItem('documentAnalyzerApiKey', apiKey);
+            localStorage.setItem(
+                'documentAnalyzerApiBaseUrl',
+                apiBaseUrl || 'https://api.deepseek.com/v1/chat/completions'
+            );
+            localStorage.setItem('documentAnalyzerModelName', modelName || 'deepseek-chat');
             closeConfigModal();
-            alert('配置已保存');
+            alert('API 配置已保存到当前浏览器');
         }
 
         async function logout() {
@@ -8253,6 +8268,13 @@ ${keywordFilter}
 
         document.addEventListener('DOMContentLoaded', function() {
             setupUploadDragStyle();
+            document.getElementById('apiKey').value =
+                sessionStorage.getItem('documentAnalyzerApiKey') || '';
+            document.getElementById('apiBaseUrl').value =
+                localStorage.getItem('documentAnalyzerApiBaseUrl')
+                || 'https://api.deepseek.com/v1/chat/completions';
+            document.getElementById('modelName').value =
+                localStorage.getItem('documentAnalyzerModelName') || 'deepseek-chat';
         });
 
         function debounce(func, wait = 200) {
