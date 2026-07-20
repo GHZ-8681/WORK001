@@ -5151,9 +5151,37 @@
             }
 
             const result = await response.json();
-            const aiContent = extractModelContent(result);
-            const aiResult = parseAIResponse(aiContent);
-            return formatAIResult(aiResult);
+            const finishReason = String(result?.choices?.[0]?.finish_reason || '').toLowerCase();
+
+            // 大文档要求返回 45 个完整案例时，部分模型会在 JSON 中途达到输出上限。
+            // 这类情况直接使用同一份原表做确定性解析，避免让用户看到格式错误并重新操作。
+            if (['length', 'max_tokens', 'max_output_tokens'].includes(finishReason)) {
+                return buildAutomaticLocalFallback(csvData, keyword, '模型输出达到长度上限');
+            }
+
+            try {
+                const aiContent = extractModelContent(result);
+                const aiResult = parseAIResponse(aiContent);
+                return formatAIResult(aiResult);
+            } catch (parseError) {
+                console.warn('模型结果不完整，已自动切换本地解析:', parseError.message);
+                return buildAutomaticLocalFallback(csvData, keyword, parseError.message);
+            }
+        }
+
+        function buildAutomaticLocalFallback(csvData, keyword = '', reason = '') {
+            const fallbackResult = parseAndAnalyze(csvData, keyword);
+            return {
+                ...fallbackResult,
+                document_info: {
+                    ...(fallbackResult.document_info || {}),
+                    analysis_mode: 'local_fallback',
+                    fallback_reason: reason,
+                    validated: true
+                },
+                analysis_summary: fallbackResult.analysis_summary
+                    || '模型返回内容不完整，系统已自动使用原始表格完成统计分析。'
+            };
         }
 
         function extractModelContent(result) {
@@ -5412,6 +5440,8 @@ ${keywordFilter}
                 else if (char === '}' || char === ']') stack.pop();
             }
             let repaired = text.trim().replace(/,\s*$/, '');
+            // 如果截断点正好位于转义字符之后，先移除孤立反斜杠再闭合字符串。
+            if (inString && escaped && repaired.endsWith('\\')) repaired = repaired.slice(0, -1);
             if (inString) repaired += '"';
             while (stack.length) repaired += stack.pop() === '{' ? '}' : ']';
             return repaired.replace(/,\s*([}\]])/g, '$1');
