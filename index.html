@@ -5321,34 +5321,49 @@
 
             records.slice(1).forEach((record, rowIndex) => {
                 const parts = parseCSVLine(record);
-                const tags = getUniqueProblemAttributionTags(parts, tagIndexes, headers);
+                const attributionEntries = getProblemAttributionEntries(parts, tagIndexes, headers);
+                const tags = attributionEntries.map(entry => entry.tag);
                 const description = String(parts[problemIndex] || '').trim();
                 const remark = getRowRemark(parts, remarkIndexes) || description;
                 if (!tags.length || (!description && !remark)) return;
                 if (keyword && ![description, remark, ...tags].some(value => String(value).toLowerCase().includes(keyword.toLowerCase()))) return;
 
-                items.push({
-                    id: rowIndex + 1,
-                    tags,
-                    description: description.slice(0, 1200),
-                    remark: remark.slice(0, 2400),
-                    script: String(scriptIndex >= 0 ? parts[scriptIndex] || '' : sheetName).trim() || sheetName || '未识别剧本',
-                    shot: String(shotIndex >= 0 ? parts[shotIndex] || '' : '').trim() || '未识别分镜'
+                attributionEntries.forEach((entry, entryIndex) => {
+                    items.push({
+                        id: `${rowIndex + 1}-${entry.columnIndex}-${entryIndex}`,
+                        dimension: entry.dimension,
+                        tag: entry.tag,
+                        tags: [entry.tag],
+                        description: description.slice(0, 1200),
+                        remark: remark.slice(0, 2400),
+                        script: String(scriptIndex >= 0 ? parts[scriptIndex] || '' : sheetName).trim() || sheetName || '未识别剧本',
+                        shot: String(shotIndex >= 0 ? parts[shotIndex] || '' : '').trim() || '未识别分镜'
+                    });
                 });
             });
 
-            // 每个大标签最多保留80条候选记录，足够挑选3×5个不重复案例，
-            // 同时避免把整份大型工作簿原样发送给模型。
+            // 每个大维度只把出现次数最高的3个标签交给AI做备注聚类；
+            // 所有标签的精确数量仍由本地完整统计。
             const selected = [];
             const used = new Set();
-            ['原视频还原度', '内容可理解性', '叙事节奏质量'].forEach(bigTag => {
-                items.filter(item => item.tags.some(tag => String(tag).includes(bigTag)))
-                    .slice(0, 80)
-                    .forEach(item => {
-                        if (!used.has(item.id)) {
-                            used.add(item.id);
-                            selected.push(item);
-                        }
+            Object.keys(DIMENSION_CONFIG).forEach(dimension => {
+                const dimensionItems = items.filter(item => item.dimension === dimension);
+                const counts = dimensionItems.reduce((map, item) => {
+                    map[item.tag] = (map[item.tag] || 0) + 1;
+                    return map;
+                }, {});
+                Object.entries(counts)
+                    .sort((a, b) => b[1] - a[1])
+                    .slice(0, 3)
+                    .forEach(([bigTag]) => {
+                        dimensionItems.filter(item => item.tag === bigTag)
+                            .slice(0, 80)
+                            .forEach(item => {
+                                if (!used.has(item.id)) {
+                                    used.add(item.id);
+                                    selected.push(item);
+                                }
+                            });
                     });
             });
             return { items: selected.length ? selected : items.slice(0, 180) };
@@ -5357,17 +5372,17 @@
         function buildCompactAnalysisPrompt(items, keyword = '') {
             const modelRows = items.map(item => ({
                 id: item.id,
-                tags: item.tags,
+                dimension: item.dimension,
+                tag: item.tag,
                 problem: item.description,
                 remark: item.remark
             }));
-            return `请根据以下“问题归因”和备注原文完成语义聚类。统计数量由程序处理，你只负责归纳问题类型和选择案例。
+            return `请根据以下问题归因标签对应的备注原文完成语义聚类。标签数量由程序处理，你只负责归纳问题类型和选择案例。
 
-固定大标签：原视频还原度、内容可理解性、叙事节奏质量。
-每个大标签：
-1. 选择问题最高且语义互不相同的3个小标签，小标签名称4至8个字；
+每个“dimension + tag”组合：
+1. 根据备注归纳出现最多且语义互不相同的3个小问题，小问题名称不超过10个字；
 2. 每个小标签选择最多5个最典型且互不重复的案例；
-3. 同一个案例ID只能属于一个小标签；
+3. 同一个案例ID在同一大标签下只能属于一个小标签；
 4. 不要改写备注，不要返回备注全文，只返回案例ID；
 5. 数据不足5条时按实际数量返回，禁止虚构。
 ${keyword ? `仅分析包含关键词“${keyword}”的记录。` : ''}
@@ -5376,11 +5391,11 @@ ${keyword ? `仅分析包含关键词“${keyword}”的记录。` : ''}
 ${JSON.stringify(modelRows)}
 
 只返回合法JSON对象，结构必须是：
-{"dimension_statistics":{"全局维度":{"top_tags":[
-{"tag":"原视频还原度","sub_tags":[{"name":"小标签","count":0,"problems":[{"id":1}]}]},
-{"tag":"内容可理解性","sub_tags":[{"name":"小标签","count":0,"problems":[{"id":2}]}]},
-{"tag":"叙事节奏质量","sub_tags":[{"name":"小标签","count":0,"problems":[{"id":3}]}]}
-]}}}`;
+{"dimension_statistics":{
+"全局维度":{"top_tags":[{"tag":"原表标签名","sub_tags":[{"name":"10字以内小问题","count":0,"problems":[{"id":"案例ID"}]}]}]},
+"分镜之间":{"top_tags":[{"tag":"原表标签名","sub_tags":[{"name":"10字以内小问题","count":0,"problems":[{"id":"案例ID"}]}]}]},
+"单分镜":{"top_tags":[{"tag":"原表标签名","sub_tags":[{"name":"10字以内小问题","count":0,"problems":[{"id":"案例ID"}]}]}]}
+}}`;
         }
 
         function hydrateAIProblemReferences(aiResult, sourceItems) {
@@ -6155,7 +6170,9 @@ ${keywordFilter}
 
                 const parts = parseCSVLine(line);
                 const problem = (parts[problemIndex] || '').trim();
-                const rowTags = getUniqueProblemAttributionTags(parts, tagIndexes, headers);
+                // 保留不同问题归因列中的独立标签引用；即使名称相同也分别计数。
+                const rowTags = getProblemAttributionEntries(parts, tagIndexes, headers)
+                    .map(entry => entry.tag);
                 const gsbTags = getUniqueRowTags(parts, allTagIndexes);
                 const script = scriptIndex !== -1 ? (parts[scriptIndex] || '').trim() : sheetName;
 
@@ -6318,7 +6335,7 @@ ${keywordFilter}
                     percentage: dimensionTotal > 0 ? ((count / dimensionTotal) * 100).toFixed(1) : '0',
                     // 为“3个小标签 × 每类5个案例”保留至少15条候选问题
                     problems: (dimensionTagProblems[dimension][tag] || []).slice(0, 15)
-                })).sort((a, b) => b.count - a.count).slice(0, 3);
+                })).sort((a, b) => b.count - a.count);
                 
                 dimensionStats[dimension].total_count = dimensionTotal;
                 dimensionStats[dimension].tag_count = Object.keys(tagCounts).length;
@@ -6537,20 +6554,20 @@ ${keywordFilter}
                 const cell = String(parts[index] || '').trim();
                 if (!cell || isNoProblemTag(cell)) return;
 
-                // 维度以“问题归因”列名为唯一依据，不再根据标签文字猜测。
+                // 维度以“问题归因”列名为唯一依据；列内的值就是标签来源。
                 const columnDimension = getAttributionColumnDimension(headers[index]);
-                const dimensions = columnDimension ? [columnDimension] : Object.keys(DIMENSION_CONFIG);
-                dimensions.forEach(dimension => {
-                    const knownTags = [...(DIMENSION_CONFIG[dimension]?.tags || [])]
-                        .sort((a, b) => b.length - a.length);
-                    knownTags.forEach(tag => {
-                        if (!cell.toLowerCase().includes(tag.toLowerCase())) return;
-                        const key = `${dimension}:${tag.toLowerCase()}`;
-                        if (!seen.has(key)) {
-                            seen.add(key);
-                            found.push({ tag, dimension, columnIndex: index });
-                        }
-                    });
+                if (!columnDimension) return;
+
+                // 统计问题归因列中的全部标签，不使用预设白名单，
+                // 也不从备注或问题描述中检索标签名称。
+                splitTags(cell).forEach(tag => {
+                    const cleanTag = normalizeTagName(tag);
+                    if (!cleanTag || isNoProblemTag(cleanTag)) return;
+                    const key = `${columnDimension}:${cleanTag.toLowerCase()}`;
+                    if (!seen.has(key)) {
+                        seen.add(key);
+                        found.push({ tag: cleanTag, dimension: columnDimension, columnIndex: index });
+                    }
                 });
             });
 
