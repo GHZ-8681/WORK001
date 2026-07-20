@@ -5149,7 +5149,8 @@
                 apiBaseUrl
             );
 
-            const prompt = buildPrompt(csvData, keyword);
+            const compactInput = buildCompactAIInput(csvData, keyword);
+            const prompt = buildCompactAnalysisPrompt(compactInput.items, keyword);
             const response = await fetchWithTimeout(apiBaseUrl, {
                 method: 'POST',
                 headers: {
@@ -5188,6 +5189,7 @@
             try {
                 const aiContent = extractModelContent(result);
                 const aiResult = parseAIResponse(aiContent);
+                hydrateAIProblemReferences(aiResult, compactInput.items);
                 return formatAIResult(aiResult);
             } catch (parseError) {
                 console.warn('模型结果不完整，已自动切换本地解析:', parseError.message);
@@ -5275,6 +5277,140 @@
 
         function getCsvData() {
             return activeInputSource === 'file' ? fileSourceData : feishuSourceData;
+        }
+
+        function getStructuredTableContext(csvData) {
+            const sheetName = getSheetNameFromCsv(csvData);
+            const rawRecords = splitCSVRecords(csvData)
+                .filter(record => !/^---\s*Sheet:.*---$/i.test(record.trim()));
+            if (!rawRecords.length) return { sheetName, records: [], headers: [] };
+
+            let bestIndex = 0;
+            let bestScore = -1;
+            rawRecords.slice(0, 120).forEach((record, index) => {
+                const headers = parseCSVLine(record).map(value => String(value || '').trim());
+                const attributionCount = findProblemAttributionColumnIndexes(headers).length;
+                const tagCount = findColumnIndexes(headers, ['标签', '分类', '类别', '类型', '问题归因', '归因', 'tag', 'category', 'type', 'label']).length;
+                const problemIndex = findColumnIndex(headers, ['问题描述', '问题内容', '问题备注', '问题', '备注', '描述', '内容', '标题', 'issue', 'problem', 'description']);
+                const score = attributionCount * 20 + tagCount * 4 + (problemIndex >= 0 ? 6 : 0) + Math.min(headers.length, 20) * 0.1;
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestIndex = index;
+                }
+            });
+
+            const records = rawRecords.slice(bestIndex);
+            return {
+                sheetName,
+                records,
+                headers: records.length ? parseCSVLine(records[0]).map(value => String(value || '').trim()) : []
+            };
+        }
+
+        function buildCompactAIInput(csvData, keyword = '') {
+            const context = getStructuredTableContext(csvData);
+            const { records, headers, sheetName } = context;
+            if (records.length < 2) return { items: [] };
+
+            const problemIndex = findColumnIndex(headers, ['问题描述', '问题内容', '问题备注', '问题', '备注', '描述', '内容', '标题', 'issue', 'problem', 'description']);
+            const tagIndexes = findProblemAttributionColumnIndexes(headers);
+            const scriptIndex = findMetadataColumnIndex(headers, 'script');
+            const shotIndex = findMetadataColumnIndex(headers, 'shot');
+            const remarkIndexes = findRemarkColumnIndexes(headers, [problemIndex, scriptIndex, shotIndex, ...tagIndexes]);
+            const items = [];
+
+            records.slice(1).forEach((record, rowIndex) => {
+                const parts = parseCSVLine(record);
+                const tags = getUniqueProblemAttributionTags(parts, tagIndexes);
+                const description = String(parts[problemIndex] || '').trim();
+                const remark = getRowRemark(parts, remarkIndexes) || description;
+                if (!tags.length || (!description && !remark)) return;
+                if (keyword && ![description, remark, ...tags].some(value => String(value).toLowerCase().includes(keyword.toLowerCase()))) return;
+
+                items.push({
+                    id: rowIndex + 1,
+                    tags,
+                    description: description.slice(0, 1200),
+                    remark: remark.slice(0, 2400),
+                    script: String(scriptIndex >= 0 ? parts[scriptIndex] || '' : sheetName).trim() || sheetName || '未识别剧本',
+                    shot: String(shotIndex >= 0 ? parts[shotIndex] || '' : '').trim() || '未识别分镜'
+                });
+            });
+
+            // 每个大标签最多保留80条候选记录，足够挑选3×5个不重复案例，
+            // 同时避免把整份大型工作簿原样发送给模型。
+            const selected = [];
+            const used = new Set();
+            ['原视频还原度', '内容可理解性', '叙事节奏质量'].forEach(bigTag => {
+                items.filter(item => item.tags.some(tag => String(tag).includes(bigTag)))
+                    .slice(0, 80)
+                    .forEach(item => {
+                        if (!used.has(item.id)) {
+                            used.add(item.id);
+                            selected.push(item);
+                        }
+                    });
+            });
+            return { items: selected.length ? selected : items.slice(0, 180) };
+        }
+
+        function buildCompactAnalysisPrompt(items, keyword = '') {
+            const modelRows = items.map(item => ({
+                id: item.id,
+                tags: item.tags,
+                problem: item.description,
+                remark: item.remark
+            }));
+            return `请根据以下“问题归因”和备注原文完成语义聚类。统计数量由程序处理，你只负责归纳问题类型和选择案例。
+
+固定大标签：原视频还原度、内容可理解性、叙事节奏质量。
+每个大标签：
+1. 选择问题最高且语义互不相同的3个小标签，小标签名称4至8个字；
+2. 每个小标签选择最多5个最典型且互不重复的案例；
+3. 同一个案例ID只能属于一个小标签；
+4. 不要改写备注，不要返回备注全文，只返回案例ID；
+5. 数据不足5条时按实际数量返回，禁止虚构。
+${keyword ? `仅分析包含关键词“${keyword}”的记录。` : ''}
+
+输入记录：
+${JSON.stringify(modelRows)}
+
+只返回合法JSON对象，结构必须是：
+{"dimension_statistics":{"全局维度":{"top_tags":[
+{"tag":"原视频还原度","sub_tags":[{"name":"小标签","count":0,"problems":[{"id":1}]}]},
+{"tag":"内容可理解性","sub_tags":[{"name":"小标签","count":0,"problems":[{"id":2}]}]},
+{"tag":"叙事节奏质量","sub_tags":[{"name":"小标签","count":0,"problems":[{"id":3}]}]}
+]}}}`;
+        }
+
+        function hydrateAIProblemReferences(aiResult, sourceItems) {
+            const sourceMap = new Map(sourceItems.map(item => [String(item.id), item]));
+            const dimensions = aiResult?.dimension_statistics || {};
+            Object.values(dimensions).forEach(dimension => {
+                (dimension?.top_tags || []).forEach(tag => {
+                    const used = new Set();
+                    (tag?.sub_tags || []).forEach(subTag => {
+                        subTag.problems = (subTag.problems || [])
+                            .map(problem => {
+                                const source = sourceMap.get(String(problem?.id ?? problem));
+                                if (!source) return null;
+                                const key = `${source.id}`;
+                                if (used.has(key)) return null;
+                                used.add(key);
+                                return {
+                                    description: source.description || source.remark,
+                                    script: source.script,
+                                    shot: source.shot,
+                                    remark: source.remark
+                                };
+                            })
+                            .filter(Boolean)
+                            .slice(0, 5);
+                        subTag.count = Number(subTag.count) || subTag.problems.length;
+                    });
+                });
+            });
+            return aiResult;
         }
 
         function validateInput(csvData, apiKey, isAI = false) {
@@ -5675,10 +5811,8 @@ ${keywordFilter}
         }
 
         function buildSourceProblemMetadata(csvData) {
-            const sheetName = getSheetNameFromCsv(csvData);
-            const records = splitCSVRecords(csvData).filter(record => !/^---\s*Sheet:.*---$/i.test(record.trim()));
+            const { sheetName, records, headers } = getStructuredTableContext(csvData);
             if (records.length < 2) return [];
-            const headers = parseCSVLine(records[0]).map(header => String(header || '').trim());
             const problemIndex = findColumnIndex(headers, ['问题描述', '问题内容', '问题备注', '问题', '备注', '描述', '内容', '标题', 'issue', 'problem', 'description']);
             const scriptIndex = findMetadataColumnIndex(headers, 'script');
             const shotIndex = findMetadataColumnIndex(headers, 'shot');
@@ -5923,7 +6057,8 @@ ${keywordFilter}
         }
 
         function parseAndAnalyze(csvData, keyword = '') {
-            const records = splitCSVRecords(csvData).filter(record => !/^---\s*Sheet:.*---$/i.test(record.trim()));
+            const structuredContext = getStructuredTableContext(csvData);
+            const records = structuredContext.records;
             if (records.length < 2) {
                 return {
                     document_info: {
@@ -5940,12 +6075,12 @@ ${keywordFilter}
                 };
             }
 
-            const headers = parseCSVLine(records[0]).map(h => h.trim());
+            const headers = structuredContext.headers;
             const problemIndex = findColumnIndex(headers, ['问题描述', '问题内容', '问题备注', '问题', '备注', '描述', '内容', '标题', 'issue', 'problem', 'description']);
             const allTagIndexes = findColumnIndexes(headers, ['标签', '分类', '类别', '类型', '问题归因', '归因', 'tag', 'category', 'type', 'label']);
             const attributionIndexes = findProblemAttributionColumnIndexes(headers);
             const tagIndexes = attributionIndexes.length > 0 ? attributionIndexes : allTagIndexes;
-            const sheetName = getSheetNameFromCsv(csvData);
+            const sheetName = structuredContext.sheetName;
             const scriptIndex = findMetadataColumnIndex(headers, 'script');
             const shotIndex = findMetadataColumnIndex(headers, 'shot');
             const scriptPromptIndex = findColumnIndex(headers, ['剧本提示词', '剧本提示', 'script_prompt', 'prompt', '剧本描述']);
