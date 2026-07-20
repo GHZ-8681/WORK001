@@ -4872,6 +4872,115 @@
             }
         }
 
+        function buildCanonicalWorkbookCsv(workbook) {
+            const canonicalHeaders = [
+                '剧本', '编号', '分镜提示词',
+                '【全局】问题归因', '【全局】问题备注',
+                '【分镜之间】问题归因', '【分镜之间】问题备注',
+                '【单分镜】问题归因', '【单分镜】问题备注'
+            ];
+            const canonicalRows = [canonicalHeaders];
+            let analyzedSheetCount = 0;
+
+            workbook.SheetNames.forEach(sheetName => {
+                const worksheet = workbook.Sheets[sheetName];
+                const rows = XLSX.utils.sheet_to_json(worksheet, {
+                    header: 1,
+                    defval: '',
+                    raw: true,
+                    blankrows: true
+                });
+                if (!rows.length) return;
+
+                let headerRowIndex = -1;
+                let bestScore = 0;
+                rows.slice(0, 120).forEach((row, index) => {
+                    const headers = row.map(value => String(value || '').trim());
+                    const attributionIndexes = findProblemAttributionColumnIndexes(headers)
+                        .filter(columnIndex => getAttributionColumnDimension(headers[columnIndex]));
+                    const remarkIndexes = findRemarkColumnIndexes(headers, attributionIndexes);
+                    const score = attributionIndexes.length * 20 + remarkIndexes.length * 5;
+                    if (score > bestScore) {
+                        bestScore = score;
+                        headerRowIndex = index;
+                    }
+                });
+                if (headerRowIndex < 0) return;
+
+                const headers = rows[headerRowIndex].map(value => String(value || '').trim());
+                const attributionIndexes = findProblemAttributionColumnIndexes(headers)
+                    .filter(index => getAttributionColumnDimension(headers[index]));
+                if (!attributionIndexes.length) return;
+                analyzedSheetCount++;
+
+                const shotIndex = findMetadataColumnIndex(headers, 'shot');
+                const shotPromptIndex = findColumnIndex(headers, ['分镜提示词', '分镜提示', '镜头提示词', '镜头提示']);
+                const remarkIndexes = findRemarkColumnIndexes(headers, attributionIndexes);
+                const attributionByDimension = {};
+                const remarkByDimension = {};
+                attributionIndexes.forEach(index => {
+                    const dimension = getAttributionColumnDimension(headers[index]);
+                    if (!attributionByDimension[dimension]) attributionByDimension[dimension] = [];
+                    attributionByDimension[dimension].push(index);
+                });
+                remarkIndexes.forEach(index => {
+                    const dimension = getAttributionColumnDimension(headers[index]);
+                    if (dimension && !remarkByDimension[dimension]) remarkByDimension[dimension] = [];
+                    if (dimension) remarkByDimension[dimension].push(index);
+                });
+
+                let currentShot = '';
+                let currentPrompt = '';
+                let currentGroupRemarks = {};
+                rows.slice(headerRowIndex + 1).forEach(row => {
+                    const ownShot = String(shotIndex >= 0 ? row[shotIndex] || '' : '').trim();
+                    if (ownShot) {
+                        currentShot = ownShot;
+                        currentPrompt = String(shotPromptIndex >= 0 ? row[shotPromptIndex] || '' : '').trim();
+                        currentGroupRemarks = {};
+                        remarkIndexes.forEach(index => {
+                            const remark = String(row[index] || '').trim();
+                            const dimension = getAttributionColumnDimension(headers[index]) || '全局维度';
+                            if (remark) currentGroupRemarks[dimension] = remark;
+                        });
+                    }
+                    if (!currentShot) return;
+
+                    const readDimensionTags = dimension => {
+                        const tags = (attributionByDimension[dimension] || [])
+                            .flatMap(index => splitTags(row[index] || ''));
+                        return [...new Set(tags)].join(',');
+                    };
+                    const globalRemark = currentGroupRemarks['全局维度'] || '';
+                    const globalTags = readDimensionTags('全局维度');
+                    const interTags = readDimensionTags('分镜之间');
+                    const singleTags = readDimensionTags('单分镜');
+                    if (!globalTags && !interTags && !singleTags) return;
+
+                    canonicalRows.push([
+                        sheetName,
+                        currentShot,
+                        currentPrompt,
+                        globalTags,
+                        currentGroupRemarks['全局维度'] || '',
+                        interTags,
+                        currentGroupRemarks['分镜之间'] || globalRemark,
+                        singleTags,
+                        currentGroupRemarks['单分镜'] || globalRemark
+                    ]);
+                });
+            });
+
+            if (!analyzedSheetCount || canonicalRows.length === 1) return '';
+            const canonicalSheet = XLSX.utils.aoa_to_sheet(canonicalRows);
+            console.log(`已合并 ${analyzedSheetCount} 个问题分析工作表，共 ${canonicalRows.length - 1} 条标签记录`);
+            return XLSX.utils.sheet_to_csv(canonicalSheet, {
+                defval: '',
+                blankrows: false,
+                raw: true
+            });
+        }
+
         function handleFileUpload(event) {
             const file = event.target.files[0];
             if (!file) return;
@@ -4896,42 +5005,7 @@
                     
                     if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
                         const workbook = XLSX.read(e.target.result, { type: 'binary' });
-                        const availableSheets = [];
-                        
-                        workbook.SheetNames.forEach(sheetName => {
-                            const worksheet = workbook.Sheets[sheetName];
-                            const sheetData = XLSX.utils.sheet_to_csv(worksheet, {
-                                defval: '',
-                                blankrows: false,
-                                raw: true
-                            });
-                            if (sheetData.trim()) {
-                                const sheetRecords = splitCSVRecords(sheetData);
-                                const sheetHeaders = sheetRecords.length
-                                    ? parseCSVLine(sheetRecords[0]).map(header => header.trim())
-                                    : [];
-                                availableSheets.push({
-                                    name: sheetName,
-                                    data: sheetData,
-                                    rowCount: Math.max(sheetRecords.length - 1, 0),
-                                    hasProblemAttribution: findProblemAttributionColumnIndexes(sheetHeaders).length > 0
-                                });
-                            }
-                        });
-
-                        // 工作簿中常包含备注、标签释义、统计看板等辅助表。
-                        // 自动选择包含“问题归因”列且有效数据最多的主表，避免跨表错位计数。
-                        const attributionSheets = availableSheets.filter(sheet => sheet.hasProblemAttribution);
-                        const candidateSheets = attributionSheets.length ? attributionSheets : availableSheets;
-                        const selectedSheet = [...candidateSheets]
-                            .sort((a, b) => b.rowCount - a.rowCount)[0];
-
-                        fileContent = selectedSheet
-                            ? `--- Sheet: ${selectedSheet.name} ---\n${selectedSheet.data}`
-                            : '';
-                        if (selectedSheet) {
-                            console.log(`已选择工作表：${selectedSheet.name}（${selectedSheet.rowCount} 条数据）`);
-                        }
+                        fileContent = buildCanonicalWorkbookCsv(workbook);
                     } else if (file.name.endsWith('.txt')) {
                         fileContent = e.target.result;
                     } else {
@@ -6554,11 +6628,18 @@ ${keywordFilter}
                 getAttributionColumnDimension(headers[index]) === entry.dimension
             );
             const candidates = sameDimensionIndexes.length ? sameDimensionIndexes : remarkIndexes;
+            let fallbackRemark = '';
             for (const index of candidates) {
-                const section = extractRemarkSectionForTag(parts[index], entry.tag);
+                const rawRemark = String(parts[index] || '').trim();
+                if (!fallbackRemark && rawRemark) fallbackRemark = rawRemark;
+                const section = extractRemarkSectionForTag(rawRemark, entry.tag);
                 if (section) return section;
             }
-            return '';
+            // 参考表中分镜间/单分镜标签没有独立备注列，只提供分镜级全局备注。
+            // 此时保留同一分镜的完整备注作为案例原因，不能返回空白或借用其他分镜。
+            return entry.dimension === '全局维度' && sameDimensionIndexes.length
+                ? ''
+                : fallbackRemark;
         }
 
         function isTagDescriptionColumn(header) {
