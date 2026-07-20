@@ -5514,13 +5514,16 @@ ${keywordFilter}
         function calibrateAnalysisResult(aiResult, csvData, keyword = '') {
             const formattedAIResult = aiResult && aiResult.tag_summary ? aiResult : formatAIResult(aiResult || {});
             if (formattedAIResult?.document_info?.statistics_source === 'problem_attribution_column') {
-                return reconcileDimensionStatisticsFromTags(formattedAIResult);
+                return correctProblemMetadataFromSource(
+                    reconcileDimensionStatisticsFromTags(formattedAIResult),
+                    csvData
+                );
             }
             const localResult = parseAndAnalyze(csvData, keyword);
             const localHasStats = localResult?.tag_summary?.total_tags > 0 || localResult?.total_problems > 0;
 
             if (!localHasStats) {
-                return formattedAIResult;
+                return correctProblemMetadataFromSource(formattedAIResult, csvData);
             }
 
             const calibratedResult = {
@@ -5540,7 +5543,90 @@ ${keywordFilter}
                 analysis_summary: formattedAIResult.analysis_summary || localResult.analysis_summary,
                 gsb_statistics: localResult.gsb_statistics || formattedAIResult.gsb_statistics || null
             };
-            return reconcileDimensionStatisticsFromTags(calibratedResult);
+            return correctProblemMetadataFromSource(
+                reconcileDimensionStatisticsFromTags(calibratedResult),
+                csvData
+            );
+        }
+
+        function getSheetNameFromCsv(csvData) {
+            const match = String(csvData || '').match(/^---\s*Sheet:\s*(.*?)\s*---$/mi);
+            return match ? match[1].trim() : '';
+        }
+
+        function findMetadataColumnIndex(headers, type) {
+            const exactCandidates = type === 'script'
+                ? ['剧本', '剧本名称', '剧本名', '脚本', '脚本名称', 'script', 'scriptname', 'script_name']
+                : ['分镜', '分镜编号', '分镜号', '镜头', '镜头编号', '镜号', 'shot', 'shotid', 'shot_id', 'storyboard'];
+            const normalizedCandidates = new Set(exactCandidates.map(normalizeHeaderName));
+            return headers.findIndex(rawHeader => {
+                const raw = String(rawHeader || '');
+                if (/(提示|描述|设定|备注|说明|内容|归因|问题)/i.test(raw)) return false;
+                return normalizedCandidates.has(normalizeHeaderName(raw));
+            });
+        }
+
+        function normalizeMetadataMatchText(value) {
+            return String(value || '')
+                .toLowerCase()
+                .replace(/^(原视频还原度问题|内容可理解性问题|叙事节奏质量问题)\s*[：:]?/i, '')
+                .replace(/[\s\p{P}\p{S}]+/gu, '');
+        }
+
+        function buildSourceProblemMetadata(csvData) {
+            const sheetName = getSheetNameFromCsv(csvData);
+            const records = splitCSVRecords(csvData).filter(record => !/^---\s*Sheet:.*---$/i.test(record.trim()));
+            if (records.length < 2) return [];
+            const headers = parseCSVLine(records[0]).map(header => String(header || '').trim());
+            const problemIndex = findColumnIndex(headers, ['问题描述', '问题内容', '问题备注', '问题', '备注', '描述', '内容', '标题', 'issue', 'problem', 'description']);
+            const scriptIndex = findMetadataColumnIndex(headers, 'script');
+            const shotIndex = findMetadataColumnIndex(headers, 'shot');
+            const tagIndexes = findProblemAttributionColumnIndexes(headers);
+            const remarkIndexes = findRemarkColumnIndexes(headers, [problemIndex, scriptIndex, shotIndex, ...tagIndexes]);
+
+            return records.slice(1).map(record => {
+                const parts = parseCSVLine(record);
+                const description = String(parts[problemIndex] || '').trim();
+                return {
+                    key: normalizeMetadataMatchText(description),
+                    description,
+                    script: String(scriptIndex >= 0 ? parts[scriptIndex] || '' : sheetName).trim() || sheetName || '未识别剧本',
+                    shot: String(shotIndex >= 0 ? parts[shotIndex] || '' : '').trim() || '未识别分镜',
+                    remark: getRowRemark(parts, remarkIndexes) || description
+                };
+            }).filter(item => item.key);
+        }
+
+        function correctProblemMetadataFromSource(result, csvData) {
+            const sourceItems = buildSourceProblemMetadata(csvData);
+            if (!sourceItems.length) return result;
+
+            const findSource = description => {
+                const key = normalizeMetadataMatchText(description);
+                if (!key) return null;
+                return sourceItems.find(item => item.key === key)
+                    || (key.length >= 12 ? sourceItems.find(item => item.key.includes(key) || key.includes(item.key)) : null);
+            };
+
+            const visit = value => {
+                if (Array.isArray(value)) {
+                    value.forEach(visit);
+                    return;
+                }
+                if (!value || typeof value !== 'object') return;
+                const description = value.description || value.problem || value.问题描述 || value.问题;
+                if (description) {
+                    const source = findSource(description);
+                    if (source) {
+                        value.script = source.script;
+                        value.shot = source.shot;
+                        value.remark = source.remark;
+                    }
+                }
+                Object.values(value).forEach(visit);
+            };
+            visit(result);
+            return result;
         }
 
         function sumTagCounts(tags = []) {
@@ -5758,8 +5844,9 @@ ${keywordFilter}
             const allTagIndexes = findColumnIndexes(headers, ['标签', '分类', '类别', '类型', '问题归因', '归因', 'tag', 'category', 'type', 'label']);
             const attributionIndexes = findProblemAttributionColumnIndexes(headers);
             const tagIndexes = attributionIndexes.length > 0 ? attributionIndexes : allTagIndexes;
-            const scriptIndex = findColumnIndex(headers, ['剧本', '剧本名称', 'script', '剧本名', '场景', '场次']);
-            const shotIndex = findColumnIndex(headers, ['分镜', '分镜名称', '分镜编号', '镜头', '镜头编号', '镜号', 'shot', 'shot_id', 'storyboard']);
+            const sheetName = getSheetNameFromCsv(csvData);
+            const scriptIndex = findMetadataColumnIndex(headers, 'script');
+            const shotIndex = findMetadataColumnIndex(headers, 'shot');
             const scriptPromptIndex = findColumnIndex(headers, ['剧本提示词', '剧本提示', 'script_prompt', 'prompt', '剧本描述']);
             const shotPromptIndex = findColumnIndex(headers, ['分镜提示词', '分镜提示', '镜头提示词', '镜头提示', 'shot_prompt', 'shot_description']);
             const remarkIndexes = findRemarkColumnIndexes(headers, [problemIndex, scriptIndex, shotIndex, scriptPromptIndex, shotPromptIndex, ...tagIndexes]);
@@ -5799,7 +5886,7 @@ ${keywordFilter}
                 const problem = (parts[problemIndex] || '').trim();
                 const rowTags = getUniqueRowTags(parts, tagIndexes);
                 const gsbTags = getUniqueRowTags(parts, allTagIndexes);
-                const script = scriptIndex !== -1 ? (parts[scriptIndex] || '').trim() : '';
+                const script = scriptIndex !== -1 ? (parts[scriptIndex] || '').trim() : sheetName;
 
                 if (!problem && rowTags.length === 0) continue;
 
@@ -5853,7 +5940,7 @@ ${keywordFilter}
                 const parts = parseCSVLine(line);
                 const problem = (parts[problemIndex] || '').trim();
                 const rowTags = getUniqueRowTags(parts, tagIndexes);
-                const script = scriptIndex !== -1 ? (parts[scriptIndex] || '').trim() : '';
+                const script = scriptIndex !== -1 ? (parts[scriptIndex] || '').trim() : sheetName;
                 const shot = shotIndex !== -1 ? (parts[shotIndex] || '').trim() : '';
                 const scriptPrompt = scriptPromptIndex !== -1 ? (parts[scriptPromptIndex] || '').trim() : '';
                 const shotPrompt = shotPromptIndex !== -1 ? (parts[shotPromptIndex] || '').trim() : '';
@@ -5913,7 +6000,7 @@ ${keywordFilter}
                 const parts = parseCSVLine(line);
                 const problem = (parts[problemIndex] || '').trim();
                 const rowTags = getUniqueRowTags(parts, tagIndexes);
-                const script = scriptIndex !== -1 ? (parts[scriptIndex] || '').trim() : '';
+                const script = scriptIndex !== -1 ? (parts[scriptIndex] || '').trim() : sheetName;
                 const shot = shotIndex !== -1 ? (parts[shotIndex] || '').trim() : '';
                 const scriptPrompt = scriptPromptIndex !== -1 ? (parts[scriptPromptIndex] || '').trim() : '';
                 const shotPrompt = shotPromptIndex !== -1 ? (parts[shotPromptIndex] || '').trim() : '';
