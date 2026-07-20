@@ -5914,7 +5914,7 @@ ${keywordFilter}
 
                 const parts = parseCSVLine(line);
                 const problem = (parts[problemIndex] || '').trim();
-                const rowTags = getUniqueRowTags(parts, tagIndexes);
+                const rowTags = getUniqueProblemAttributionTags(parts, tagIndexes);
                 const gsbTags = getUniqueRowTags(parts, allTagIndexes);
                 const script = scriptIndex !== -1 ? (parts[scriptIndex] || '').trim() : sheetName;
 
@@ -5969,7 +5969,7 @@ ${keywordFilter}
                 
                 const parts = parseCSVLine(line);
                 const problem = (parts[problemIndex] || '').trim();
-                const rowTags = getUniqueRowTags(parts, tagIndexes);
+                const rowTags = getUniqueProblemAttributionTags(parts, tagIndexes);
                 const script = scriptIndex !== -1 ? (parts[scriptIndex] || '').trim() : sheetName;
                 const shot = shotIndex !== -1 ? (parts[shotIndex] || '').trim() : '';
                 const scriptPrompt = scriptPromptIndex !== -1 ? (parts[scriptPromptIndex] || '').trim() : '';
@@ -6029,7 +6029,7 @@ ${keywordFilter}
 
                 const parts = parseCSVLine(line);
                 const problem = (parts[problemIndex] || '').trim();
-                const rowTags = getUniqueRowTags(parts, tagIndexes);
+                const rowTags = getUniqueProblemAttributionTags(parts, tagIndexes);
                 const script = scriptIndex !== -1 ? (parts[scriptIndex] || '').trim() : sheetName;
                 const shot = shotIndex !== -1 ? (parts[shotIndex] || '').trim() : '';
                 const scriptPrompt = scriptPromptIndex !== -1 ? (parts[scriptPromptIndex] || '').trim() : '';
@@ -6274,6 +6274,32 @@ ${keywordFilter}
                 });
             });
             return tags;
+        }
+
+        function getUniqueProblemAttributionTags(parts, tagIndexes) {
+            const knownTags = Object.values(DIMENSION_CONFIG)
+                .flatMap(config => config.tags)
+                .sort((a, b) => b.length - a.length);
+            const found = [];
+            const seen = new Set();
+
+            tagIndexes.forEach(index => {
+                const cell = String(parts[index] || '').trim();
+                if (!cell || isNoProblemTag(cell)) return;
+
+                // “问题归因”单元格可能同时包含百分比和备注正文。
+                // 只提取三维度配置中的正式标签名称，不能把正文逗号分段后当成新标签。
+                knownTags.forEach(tag => {
+                    if (!cell.toLowerCase().includes(tag.toLowerCase())) return;
+                    const key = tag.toLowerCase();
+                    if (!seen.has(key)) {
+                        seen.add(key);
+                        found.push(tag);
+                    }
+                });
+            });
+
+            return found;
         }
 
         function normalizeProblemText(problem) {
