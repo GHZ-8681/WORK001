@@ -4650,11 +4650,11 @@
                 </div>
                 <div class="form-group">
                     <label for="apiBaseUrl">API地址</label>
-                    <input type="text" id="apiBaseUrl" placeholder="https://api.deepseek.com/v1/chat/completions" value="https://api.deepseek.com/v1/chat/completions">
+                    <input type="text" id="apiBaseUrl" placeholder="https://api.deepseek.com/chat/completions" value="https://api.deepseek.com/chat/completions">
                 </div>
                 <div class="form-group">
                     <label for="modelName">模型名称</label>
-                    <input type="text" id="modelName" placeholder="deepseek-chat" value="deepseek-chat">
+                    <input type="text" id="modelName" placeholder="deepseek-v4-flash" value="deepseek-v4-flash">
                 </div>
                 <div id="keyStatus" class="status-message"></div>
             </div>
@@ -5142,9 +5142,12 @@
 
         async function analyzeWithDirectAPI(csvData, apiKey, keyword = '') {
             const apiBaseUrl = normalizeApiEndpoint(
-                document.getElementById('apiBaseUrl').value || 'https://api.deepseek.com/v1/chat/completions'
+                document.getElementById('apiBaseUrl').value || 'https://api.deepseek.com/chat/completions'
             );
-            const modelName = document.getElementById('modelName').value.trim() || 'deepseek-chat';
+            const modelName = normalizeModelName(
+                document.getElementById('modelName').value.trim() || 'deepseek-v4-flash',
+                apiBaseUrl
+            );
 
             const prompt = buildPrompt(csvData, keyword);
             const response = await fetchWithTimeout(apiBaseUrl, {
@@ -5160,7 +5163,11 @@
                         { role: 'user', content: prompt }
                     ],
                     temperature: 0.1,
-                    max_tokens: 8192
+                    max_tokens: 16384,
+                    ...(isDeepSeekEndpoint(apiBaseUrl) ? {
+                        response_format: { type: 'json_object' },
+                        thinking: { type: 'disabled' }
+                    } : {})
                 })
             }, 90000);
 
@@ -5190,12 +5197,15 @@
 
         function normalizeApiEndpoint(rawUrl) {
             let url = String(rawUrl || '').trim().replace(/\/+$/, '');
-            if (!url) return 'https://api.deepseek.com/v1/chat/completions';
+            if (!url) return 'https://api.deepseek.com/chat/completions';
 
             try {
                 const parsed = new URL(url);
                 const path = parsed.pathname.replace(/\/+$/, '');
-                if (!path || path === '/') {
+                const isDeepSeek = /(^|\.)api\.deepseek\.com$/i.test(parsed.hostname);
+                if (isDeepSeek && (!path || path === '/' || path === '/v1' || path === '/v1/chat/completions')) {
+                    parsed.pathname = '/chat/completions';
+                } else if (!path || path === '/') {
                     parsed.pathname = '/v1/chat/completions';
                 } else if (/\/v1$/i.test(path)) {
                     parsed.pathname = `${path}/chat/completions`;
@@ -5206,6 +5216,22 @@
             } catch (error) {
                 throw new Error('API地址格式不正确，请填写完整的 http 或 https 地址');
             }
+        }
+
+        function isDeepSeekEndpoint(apiUrl) {
+            try {
+                return /(^|\.)api\.deepseek\.com$/i.test(new URL(apiUrl).hostname);
+            } catch (error) {
+                return false;
+            }
+        }
+
+        function normalizeModelName(rawModel, apiUrl) {
+            const model = String(rawModel || '').trim() || 'deepseek-v4-flash';
+            if (!isDeepSeekEndpoint(apiUrl)) return model;
+            if (model === 'deepseek-chat') return 'deepseek-v4-flash';
+            if (model === 'deepseek-reasoner') return 'deepseek-v4-pro';
+            return model;
         }
 
         function isPlausibleApiKey(apiKey) {
@@ -8479,7 +8505,7 @@ ${keywordFilter}
             let apiBaseUrl;
             try {
                 apiBaseUrl = normalizeApiEndpoint(
-                    document.getElementById('apiBaseUrl').value || 'https://api.deepseek.com/v1/chat/completions'
+                    document.getElementById('apiBaseUrl').value || 'https://api.deepseek.com/chat/completions'
                 );
             } catch (error) {
                 const statusDiv = document.getElementById('keyStatus');
@@ -8487,7 +8513,10 @@ ${keywordFilter}
                 statusDiv.innerHTML = escapeHtml(error.message);
                 return;
             }
-            const modelName = document.getElementById('modelName').value.trim() || 'deepseek-chat';
+            const modelName = normalizeModelName(
+                document.getElementById('modelName').value.trim() || 'deepseek-v4-flash',
+                apiBaseUrl
+            );
             const statusDiv = document.getElementById('keyStatus');
 
             if (!isPlausibleApiKey(apiKey)) {
@@ -8561,7 +8590,10 @@ ${keywordFilter}
                 return;
             }
             localStorage.setItem('documentAnalyzerApiBaseUrl', normalizedUrl);
-            localStorage.setItem('documentAnalyzerModelName', modelName || 'deepseek-chat');
+            localStorage.setItem(
+                'documentAnalyzerModelName',
+                normalizeModelName(modelName || 'deepseek-v4-flash', normalizedUrl)
+            );
             closeConfigModal();
             alert('API 配置已保存到当前浏览器');
         }
@@ -8597,9 +8629,9 @@ ${keywordFilter}
                 sessionStorage.getItem('documentAnalyzerApiKey') || '';
             document.getElementById('apiBaseUrl').value =
                 localStorage.getItem('documentAnalyzerApiBaseUrl')
-                || 'https://api.deepseek.com/v1/chat/completions';
+                || 'https://api.deepseek.com/chat/completions';
             document.getElementById('modelName').value =
-                localStorage.getItem('documentAnalyzerModelName') || 'deepseek-chat';
+                localStorage.getItem('documentAnalyzerModelName') || 'deepseek-v4-flash';
         });
 
         function debounce(func, wait = 200) {
