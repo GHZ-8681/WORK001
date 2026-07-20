@@ -5806,7 +5806,8 @@ ${keywordFilter}
                     count,
                     percentage: totalTags > 0 ? ((count / totalTags) * 100).toFixed(1) : '0',
                     description: getTagDescription(tag),
-                    problems: (tagProblemsMap[tag] || []).slice(0, 5)
+                    // 保留足够的候选案例，供 3 个小问题分别分配 5 条。
+                    problems: (tagProblemsMap[tag] || []).slice(0, 15)
                 }))
                 .sort((a, b) => b.count - a.count);
 
@@ -6382,13 +6383,21 @@ ${keywordFilter}
                     normalizeTagName(item?.tag || '').toLowerCase()
                     === normalizeTagName(tag.tag || '').toLowerCase()
                 ) || {};
+                const mergedProblems = [];
+                const mergedProblemKeys = new Set();
+                [...(aiTag.problems || []), ...(tag.problems || [])].forEach(problem => {
+                    const key = `${normalizeProblemText(problem)}|${normalizeProblemScript(problem)}|${normalizeProblemShot(problem)}`;
+                    if (!key || mergedProblemKeys.has(key)) return;
+                    mergedProblemKeys.add(key);
+                    mergedProblems.push(problem);
+                });
                 const count = Number(tag.count) || 0;
                 rebuilt[dimension].total_count += count;
                 allDimensionTags[dimension].push({
                     ...aiTag,
                     ...tag,
                     count,
-                    problems: tag.problems?.length ? tag.problems : (aiTag.problems || []),
+                    problems: mergedProblems.slice(0, 15),
                     sub_tags: aiTag.sub_tags || aiTag.subTags || aiTag.small_tags || []
                 });
             });
@@ -7495,12 +7504,24 @@ ${keywordFilter}
         function normalizeProblemSubtags(tag) {
             const source = tag.sub_tags || tag.subTags || tag.small_tags || [];
             if (source.length) {
+                const candidatePool = [];
+                const candidateKeys = new Set();
+                [
+                    ...source.flatMap(item => item.problems || item.cases || []),
+                    ...(tag.problems || [])
+                ].forEach(problem => {
+                    const key = `${normalizeProblemText(problem)}|${normalizeProblemScript(problem)}|${normalizeProblemShot(problem)}`;
+                    if (!key || candidateKeys.has(key)) return;
+                    candidateKeys.add(key);
+                    candidatePool.push(problem);
+                });
+
                 const normalized = [...source]
                     .sort((a, b) => (Number(b.count) || b.problems?.length || b.cases?.length || 0) - (Number(a.count) || a.problems?.length || a.cases?.length || 0))
                     .slice(0, 3).map((item, index) => ({
                     name: item.name || item.tag || item.label || `问题类型${index + 1}`,
                     count: Number(item.count) || (item.problems || item.cases || []).length,
-                    problems: (item.problems || item.cases || []).slice(0, 5)
+                    problems: [...(item.problems || item.cases || [])]
                 }));
 
                 const used = new Set();
@@ -7510,7 +7531,15 @@ ${keywordFilter}
                         if (used.has(key)) return false;
                         used.add(key);
                         return true;
-                    });
+                    }).slice(0, 5);
+
+                    for (const problem of candidatePool) {
+                        if (item.problems.length >= 5) break;
+                        const key = `${normalizeProblemText(problem)}|${normalizeProblemScript(problem)}|${normalizeProblemShot(problem)}`;
+                        if (used.has(key)) continue;
+                        used.add(key);
+                        item.problems.push(problem);
+                    }
                 });
                 return normalized;
             }
@@ -7542,6 +7571,20 @@ ${keywordFilter}
             while (result.length < 3) {
                 result.push({ name: fallbackNames[result.length], count: 0, problems: [] });
             }
+
+            const allocatedKeys = new Set();
+            result.forEach(item => item.problems.forEach(problem => {
+                allocatedKeys.add(`${normalizeProblemText(problem)}|${normalizeProblemScript(problem)}|${normalizeProblemShot(problem)}`);
+            }));
+            result.forEach(item => {
+                for (const problem of uniqueProblems) {
+                    if (item.problems.length >= 5) break;
+                    const key = `${normalizeProblemText(problem)}|${normalizeProblemScript(problem)}|${normalizeProblemShot(problem)}`;
+                    if (allocatedKeys.has(key)) continue;
+                    allocatedKeys.add(key);
+                    item.problems.push(problem);
+                }
+            });
 
             return result;
         }
