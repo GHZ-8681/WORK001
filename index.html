@@ -5137,10 +5137,11 @@
                 body: JSON.stringify({
                     model: modelName,
                     messages: [
-                        { role: 'system', content: '你是一个专业的文档分析助手，擅长从文档中提取问题标签并进行统计分析。' },
+                        { role: 'system', content: '你是一个专业的文档分析助手。必须只返回一个完整、合法的JSON对象，不要输出Markdown代码块、解释文字或思考过程。' },
                         { role: 'user', content: prompt }
                     ],
-                    temperature: 0.3
+                    temperature: 0.1,
+                    max_tokens: 8192
                 })
             }, 300000);
 
@@ -5150,9 +5151,27 @@
             }
 
             const result = await response.json();
-            const aiContent = result.choices[0].message.content;
+            const aiContent = extractModelContent(result);
             const aiResult = parseAIResponse(aiContent);
             return formatAIResult(aiResult);
+        }
+
+        function extractModelContent(result) {
+            const content = result?.choices?.[0]?.message?.content
+                ?? result?.choices?.[0]?.text
+                ?? result?.output_text
+                ?? result?.output?.[0]?.content?.[0]?.text;
+
+            if (Array.isArray(content)) {
+                const joined = content
+                    .map(item => typeof item === 'string' ? item : (item?.text || item?.content || ''))
+                    .join('');
+                if (joined.trim()) return joined;
+            }
+
+            if (typeof content === 'string' && content.trim()) return content;
+            if (content && typeof content === 'object') return JSON.stringify(content);
+            throw new Error('模型未返回可解析的分析内容');
         }
 
         function getCsvData() {
@@ -5344,23 +5363,80 @@ ${keywordFilter}
             throw new Error(errorMessage);
         }
 
-        function parseAIResponse(aiContent) {
-            try {
-                let jsonStr = aiContent.trim();
-                
-                jsonStr = jsonStr.replace(/^```json\s*/i, '').replace(/\s*```$/, '');
-                jsonStr = jsonStr.replace(/^```\s*/i, '').replace(/\s*```$/, '');
-                
-                const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
-                if (jsonMatch) {
-                    jsonStr = jsonMatch[0];
+        function findBalancedJSONObject(text) {
+            const start = text.indexOf('{');
+            if (start < 0) return '';
+            let depth = 0;
+            let inString = false;
+            let escaped = false;
+
+            for (let i = start; i < text.length; i++) {
+                const char = text[i];
+                if (inString) {
+                    if (escaped) escaped = false;
+                    else if (char === '\\') escaped = true;
+                    else if (char === '"') inString = false;
+                    continue;
                 }
-                
-                return JSON.parse(jsonStr);
-            } catch (e) {
-                console.error('解析AI返回结果失败:', e);
-                throw new Error('模型返回结果格式错误，请重试');
+                if (char === '"') inString = true;
+                else if (char === '{') depth++;
+                else if (char === '}' && --depth === 0) return text.slice(start, i + 1);
             }
+            return text.slice(start);
+        }
+
+        function repairJSONText(text) {
+            return text
+                .replace(/^\uFEFF/, '')
+                .replace(/```(?:json)?/gi, '')
+                .replace(/[\u201C\u201D]/g, '"')
+                .replace(/[\u2018\u2019]/g, "'")
+                .replace(/,\s*([}\]])/g, '$1')
+                .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, ' ');
+        }
+
+        function closeTruncatedJSON(text) {
+            let inString = false;
+            let escaped = false;
+            const stack = [];
+            for (let i = 0; i < text.length; i++) {
+                const char = text[i];
+                if (inString) {
+                    if (escaped) escaped = false;
+                    else if (char === '\\') escaped = true;
+                    else if (char === '"') inString = false;
+                    continue;
+                }
+                if (char === '"') inString = true;
+                else if (char === '{' || char === '[') stack.push(char);
+                else if (char === '}' || char === ']') stack.pop();
+            }
+            let repaired = text.trim().replace(/,\s*$/, '');
+            if (inString) repaired += '"';
+            while (stack.length) repaired += stack.pop() === '{' ? '}' : ']';
+            return repaired.replace(/,\s*([}\]])/g, '$1');
+        }
+
+        function parseAIResponse(aiContent) {
+            const raw = typeof aiContent === 'string' ? aiContent.trim() : JSON.stringify(aiContent);
+            const balanced = findBalancedJSONObject(repairJSONText(raw));
+            const candidates = [
+                balanced,
+                repairJSONText(balanced),
+                closeTruncatedJSON(repairJSONText(balanced))
+            ].filter(Boolean);
+
+            for (const candidate of candidates) {
+                try {
+                    const parsed = JSON.parse(candidate);
+                    if (parsed && typeof parsed === 'object') return parsed;
+                } catch (error) {
+                    // 继续尝试下一种修复方式。
+                }
+            }
+
+            console.error('解析AI返回结果失败，返回内容前500字符:', raw.slice(0, 500));
+            throw new Error('模型返回内容不完整或不是有效JSON，请重新分析');
         }
 
         function formatAIResult(aiResult) {
