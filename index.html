@@ -5321,7 +5321,7 @@
 
             records.slice(1).forEach((record, rowIndex) => {
                 const parts = parseCSVLine(record);
-                const tags = getUniqueProblemAttributionTags(parts, tagIndexes);
+                const tags = getUniqueProblemAttributionTags(parts, tagIndexes, headers);
                 const description = String(parts[problemIndex] || '').trim();
                 const remark = getRowRemark(parts, remarkIndexes) || description;
                 if (!tags.length || (!description && !remark)) return;
@@ -6120,7 +6120,7 @@ ${keywordFilter}
 
                 const parts = parseCSVLine(line);
                 const problem = (parts[problemIndex] || '').trim();
-                const rowTags = getUniqueProblemAttributionTags(parts, tagIndexes);
+                const rowTags = getUniqueProblemAttributionTags(parts, tagIndexes, headers);
                 const gsbTags = getUniqueRowTags(parts, allTagIndexes);
                 const script = scriptIndex !== -1 ? (parts[scriptIndex] || '').trim() : sheetName;
 
@@ -6175,7 +6175,7 @@ ${keywordFilter}
                 
                 const parts = parseCSVLine(line);
                 const problem = (parts[problemIndex] || '').trim();
-                const rowTags = getUniqueProblemAttributionTags(parts, tagIndexes);
+                const rowTags = getUniqueProblemAttributionTags(parts, tagIndexes, headers);
                 const script = scriptIndex !== -1 ? (parts[scriptIndex] || '').trim() : sheetName;
                 const shot = shotIndex !== -1 ? (parts[shotIndex] || '').trim() : '';
                 const scriptPrompt = scriptPromptIndex !== -1 ? (parts[scriptPromptIndex] || '').trim() : '';
@@ -6235,7 +6235,8 @@ ${keywordFilter}
 
                 const parts = parseCSVLine(line);
                 const problem = (parts[problemIndex] || '').trim();
-                const rowTags = getUniqueProblemAttributionTags(parts, tagIndexes);
+                const attributionEntries = getProblemAttributionEntries(parts, tagIndexes, headers);
+                const rowTags = attributionEntries.map(entry => entry.tag);
                 const script = scriptIndex !== -1 ? (parts[scriptIndex] || '').trim() : sheetName;
                 const shot = shotIndex !== -1 ? (parts[shotIndex] || '').trim() : '';
                 const scriptPrompt = scriptPromptIndex !== -1 ? (parts[scriptPromptIndex] || '').trim() : '';
@@ -6244,8 +6245,7 @@ ${keywordFilter}
 
                 if (!problem && rowTags.length === 0) continue;
                 
-                rowTags.forEach(cleanTag => {
-                    const dimension = getTagDimension(cleanTag);
+                attributionEntries.forEach(({ tag: cleanTag, dimension }) => {
                     if (dimension && dimensionTagCounts[dimension]) {
                         if (!dimensionTagCounts[dimension][cleanTag]) {
                             dimensionTagCounts[dimension][cleanTag] = 0;
@@ -6355,7 +6355,9 @@ ${keywordFilter}
                     problem_column: headers[problemIndex],
                     tag_columns: tagIndexes.map(index => headers[index]),
                     script_column: scriptIndex === -1 ? null : headers[scriptIndex],
-                    shot_column: shotIndex === -1 ? null : headers[shotIndex]
+                    shot_column: shotIndex === -1 ? null : headers[shotIndex],
+                    statistics_source: 'problem_attribution_column',
+                    dimension_source: 'problem_attribution_columns'
                 },
                 tag_summary: {
                     total_tags: totalTags,
@@ -6414,9 +6416,19 @@ ${keywordFilter}
                 if (isTagDescriptionColumn(rawHeader)) return indexes;
 
                 const header = normalizeHeaderName(rawHeader);
-                if (candidates.has(header)) indexes.push(index);
+                const isDimensionAttribution = /(全局|分镜间|分镜之间|单分镜)/.test(header)
+                    && /(问题归因|归因标签|原因归因|归因)/.test(header);
+                if (candidates.has(header) || isDimensionAttribution) indexes.push(index);
                 return indexes;
             }, []);
+        }
+
+        function getAttributionColumnDimension(header) {
+            const normalized = normalizeHeaderName(header);
+            if (/单分镜/.test(normalized)) return '单分镜';
+            if (/分镜间|分镜之间/.test(normalized)) return '分镜之间';
+            if (/全局/.test(normalized)) return '全局维度';
+            return null;
         }
 
         function normalizeHeaderName(header) {
@@ -6482,10 +6494,7 @@ ${keywordFilter}
             return tags;
         }
 
-        function getUniqueProblemAttributionTags(parts, tagIndexes) {
-            const knownTags = Object.values(DIMENSION_CONFIG)
-                .flatMap(config => config.tags)
-                .sort((a, b) => b.length - a.length);
+        function getProblemAttributionEntries(parts, tagIndexes, headers = []) {
             const found = [];
             const seen = new Set();
 
@@ -6493,19 +6502,36 @@ ${keywordFilter}
                 const cell = String(parts[index] || '').trim();
                 if (!cell || isNoProblemTag(cell)) return;
 
-                // “问题归因”单元格可能同时包含百分比和备注正文。
-                // 只提取三维度配置中的正式标签名称，不能把正文逗号分段后当成新标签。
-                knownTags.forEach(tag => {
-                    if (!cell.toLowerCase().includes(tag.toLowerCase())) return;
-                    const key = tag.toLowerCase();
-                    if (!seen.has(key)) {
-                        seen.add(key);
-                        found.push(tag);
-                    }
+                // 维度以“问题归因”列名为唯一依据，不再根据标签文字猜测。
+                const columnDimension = getAttributionColumnDimension(headers[index]);
+                const dimensions = columnDimension ? [columnDimension] : Object.keys(DIMENSION_CONFIG);
+                dimensions.forEach(dimension => {
+                    const knownTags = [...(DIMENSION_CONFIG[dimension]?.tags || [])]
+                        .sort((a, b) => b.length - a.length);
+                    knownTags.forEach(tag => {
+                        if (!cell.toLowerCase().includes(tag.toLowerCase())) return;
+                        const key = `${dimension}:${tag.toLowerCase()}`;
+                        if (!seen.has(key)) {
+                            seen.add(key);
+                            found.push({ tag, dimension, columnIndex: index });
+                        }
+                    });
                 });
             });
 
             return found;
+        }
+
+        function getUniqueProblemAttributionTags(parts, tagIndexes, headers = []) {
+            const seen = new Set();
+            return getProblemAttributionEntries(parts, tagIndexes, headers)
+                .map(entry => entry.tag)
+                .filter(tag => {
+                    const key = tag.toLowerCase();
+                    if (seen.has(key)) return false;
+                    seen.add(key);
+                    return true;
+                });
         }
 
         function normalizeProblemText(problem) {
@@ -6781,6 +6807,9 @@ ${keywordFilter}
         }
 
         function reconcileDimensionStatisticsFromTags(result) {
+            if (result?.document_info?.dimension_source === 'problem_attribution_columns') {
+                return result;
+            }
             const tagDetails = result?.tag_summary?.tag_details || [];
             if (!tagDetails.length) return result;
 
