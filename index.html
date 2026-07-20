@@ -5380,7 +5380,7 @@
             return `请根据以下问题归因标签对应的备注原文完成语义聚类。标签数量由程序处理，你只负责归纳问题类型和选择案例。
 
 每个“dimension + tag”组合：
-1. 先根据备注归纳约5个语义互不相同的通用问题，再按实际出现次数只返回占比最高的3个；小问题名称不超过10个字；
+1. 先根据备注归纳5至10个语义互不相同的通用问题，再按实际出现次数只返回占比最高的3个；小问题名称不超过10个字；
 2. 每个小标签选择最多5个最典型且互不重复的案例；
 3. 同一个案例ID在同一大标签下只能属于一个小标签；
 4. 不要改写备注，不要返回备注全文，只返回案例ID；
@@ -5765,12 +5765,8 @@ ${keywordFilter}
 
         function calibrateAnalysisResult(aiResult, csvData, keyword = '') {
             const formattedAIResult = aiResult && aiResult.tag_summary ? aiResult : formatAIResult(aiResult || {});
-            if (formattedAIResult?.document_info?.statistics_source === 'problem_attribution_column') {
-                return correctProblemMetadataFromSource(
-                    reconcileDimensionStatisticsFromTags(formattedAIResult),
-                    csvData
-                );
-            }
+            // AI 结果永远不能作为标签数量来源。每次都从当前表格的三类
+            // “问题归因”列重新做确定性统计，再仅合并 AI 的备注聚类结果。
             const localResult = parseAndAnalyze(csvData, keyword);
             const localHasStats = localResult?.tag_summary?.total_tags > 0 || localResult?.total_problems > 0;
 
@@ -6735,6 +6731,9 @@ ${keywordFilter}
                         i++;
                     } else {
                         inQuotes = !inQuotes;
+                        // 必须保留字段外层引号，后续 parseCSVLine 才能正确区分
+                        // 备注内的逗号与真正的列分隔符。
+                        current += char;
                     }
                     continue;
                 }
