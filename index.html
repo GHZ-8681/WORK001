@@ -5773,8 +5773,11 @@ ${keywordFilter}
                 },
                 tag_summary: localResult.tag_summary,
                 top_tags: formattedAIResult.top_tags?.length ? formattedAIResult.top_tags : localResult.top_tags,
-                // 保留模型生成的小标签总结和完整案例；数量在下一步由本地结果覆盖。
-                dimension_statistics: formattedAIResult.dimension_statistics,
+                // AI 只提供小标签聚类和案例选择；所有大标签数量始终以原表统计为准。
+                dimension_statistics: mergeAIDimensionDetailsWithLocalCounts(
+                    localResult.dimension_statistics,
+                    formattedAIResult.dimension_statistics
+                ),
                 top_problems: localResult.top_problems || [],
                 total_problems: localResult.total_problems,
                 analysis_summary: formattedAIResult.analysis_summary || localResult.analysis_summary,
@@ -5784,6 +5787,38 @@ ${keywordFilter}
                 reconcileDimensionStatisticsFromTags(calibratedResult),
                 csvData
             );
+        }
+
+        function mergeAIDimensionDetailsWithLocalCounts(localDimensions = {}, aiDimensions = {}) {
+            const merged = {};
+            Object.keys(DIMENSION_CONFIG).forEach(dimension => {
+                const localDimension = localDimensions?.[dimension] || {
+                    total_count: 0,
+                    tag_count: 0,
+                    total_problems: 0,
+                    top_tags: []
+                };
+                const aiTags = aiDimensions?.[dimension]?.top_tags || [];
+                const aiTagMap = new Map(aiTags.map(tag => [String(tag?.tag || '').trim(), tag]));
+
+                merged[dimension] = {
+                    ...localDimension,
+                    total_count: Number(localDimension.total_count) || 0,
+                    tag_count: Number(localDimension.tag_count) || 0,
+                    total_problems: Number(localDimension.total_problems) || 0,
+                    top_tags: (localDimension.top_tags || []).map(localTag => {
+                        const aiTag = aiTagMap.get(String(localTag?.tag || '').trim());
+                        return {
+                            ...localTag,
+                            count: Number(localTag.count) || 0,
+                            percentage: localTag.percentage,
+                            problems: localTag.problems || [],
+                            sub_tags: aiTag?.sub_tags?.length ? aiTag.sub_tags : (localTag.sub_tags || [])
+                        };
+                    })
+                };
+            });
+            return merged;
         }
 
         function getSheetNameFromCsv(csvData) {
