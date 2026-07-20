@@ -3147,7 +3147,7 @@
             flex-shrink: 0;
             width: 28px;
             height: 28px;
-            border-radius: 6px;
+            border-radius: 50%;
             background: var(--primary-color);
             color: #fff;
             font-size: 0.75rem;
@@ -6606,7 +6606,9 @@ ${keywordFilter}
             const interCount = dimStats['分镜之间']?.total_count || 0;
             const singleCount = dimStats['单分镜']?.total_count || 0;
 
-            if (totalTagsEl) totalTagsEl.textContent = result.tag_summary.total_tags;
+            const totalDimensionTags = globalCount + interCount + singleCount;
+
+            if (totalTagsEl) totalTagsEl.textContent = totalDimensionTags;
             if (globalTagsEl) globalTagsEl.textContent = globalCount;
             if (interTagsEl) interTagsEl.textContent = interCount;
             if (singleTagsEl) singleTagsEl.textContent = singleCount;
