@@ -5322,21 +5322,21 @@
             records.slice(1).forEach((record, rowIndex) => {
                 const parts = parseCSVLine(record);
                 const attributionEntries = getProblemAttributionEntries(parts, tagIndexes, headers);
-                const tags = attributionEntries.map(entry => entry.tag);
                 const description = String(parts[problemIndex] || '').trim();
-                const remark = getRowRemark(parts, remarkIndexes) || description;
-                if (!tags.length || (!description && !remark)) return;
-                if (keyword && ![description, remark, ...tags].some(value => String(value).toLowerCase().includes(keyword.toLowerCase()))) return;
+                if (!attributionEntries.length) return;
 
                 attributionEntries.forEach((entry, entryIndex) => {
+                    const remark = getRemarkForAttributionEntry(parts, headers, remarkIndexes, entry) || description;
+                    if (!remark) return;
+                    if (keyword && ![description, remark, entry.tag].some(value => String(value).toLowerCase().includes(keyword.toLowerCase()))) return;
                     items.push({
                         id: `${rowIndex + 1}-${entry.columnIndex}-${entryIndex}`,
                         dimension: entry.dimension,
                         tag: entry.tag,
                         tags: [entry.tag],
-                        description: description.slice(0, 1200),
+                        description: remark.slice(0, 1200),
                         remark: remark.slice(0, 2400),
-                        script: String(scriptIndex >= 0 ? parts[scriptIndex] || '' : sheetName).trim() || sheetName || '未识别剧本',
+                        script: sheetName || String(scriptIndex >= 0 ? parts[scriptIndex] || '' : '').trim() || '未识别剧本',
                         shot: String(shotIndex >= 0 ? parts[shotIndex] || '' : '').trim() || '未识别分镜'
                     });
                 });
@@ -5380,7 +5380,7 @@
             return `请根据以下问题归因标签对应的备注原文完成语义聚类。标签数量由程序处理，你只负责归纳问题类型和选择案例。
 
 每个“dimension + tag”组合：
-1. 根据备注归纳出现最多且语义互不相同的3个小问题，小问题名称不超过10个字；
+1. 先根据备注归纳约5个语义互不相同的通用问题，再按实际出现次数只返回占比最高的3个；小问题名称不超过10个字；
 2. 每个小标签选择最多5个最典型且互不重复的案例；
 3. 同一个案例ID在同一大标签下只能属于一个小标签；
 4. 不要改写备注，不要返回备注全文，只返回案例ID；
@@ -5844,7 +5844,7 @@ ${keywordFilter}
         function findMetadataColumnIndex(headers, type) {
             const exactCandidates = type === 'script'
                 ? ['剧本', '剧本名称', '剧本名', '脚本', '脚本名称', 'script', 'scriptname', 'script_name']
-                : ['分镜', '分镜编号', '分镜号', '镜头', '镜头编号', '镜号', 'shot', 'shotid', 'shot_id', 'storyboard'];
+                : ['编号', '分镜', '分镜编号', '分镜号', '镜头', '镜头编号', '镜号', 'shot', 'shotid', 'shot_id', 'storyboard'];
             const normalizedCandidates = new Set(exactCandidates.map(normalizeHeaderName));
             return headers.findIndex(rawHeader => {
                 const raw = String(rawHeader || '');
@@ -5869,16 +5869,18 @@ ${keywordFilter}
             const tagIndexes = findProblemAttributionColumnIndexes(headers);
             const remarkIndexes = findRemarkColumnIndexes(headers, [problemIndex, scriptIndex, shotIndex, ...tagIndexes]);
 
-            return records.slice(1).map(record => {
+            return records.slice(1).flatMap(record => {
                 const parts = parseCSVLine(record);
-                const description = String(parts[problemIndex] || '').trim();
-                return {
-                    key: normalizeMetadataMatchText(description),
-                    description,
-                    script: String(scriptIndex >= 0 ? parts[scriptIndex] || '' : sheetName).trim() || sheetName || '未识别剧本',
-                    shot: String(shotIndex >= 0 ? parts[shotIndex] || '' : '').trim() || '未识别分镜',
-                    remark: getRowRemark(parts, remarkIndexes) || description
-                };
+                return getProblemAttributionEntries(parts, tagIndexes, headers).map(entry => {
+                    const remark = getRemarkForAttributionEntry(parts, headers, remarkIndexes, entry);
+                    return {
+                        key: normalizeMetadataMatchText(remark),
+                        description: remark,
+                        script: sheetName || String(scriptIndex >= 0 ? parts[scriptIndex] || '' : '').trim() || '未识别剧本',
+                        shot: String(shotIndex >= 0 ? parts[shotIndex] || '' : '').trim() || '未识别分镜',
+                        remark
+                    };
+                });
             }).filter(item => item.key);
         }
 
@@ -6137,7 +6139,7 @@ ${keywordFilter}
             const shotPromptIndex = findColumnIndex(headers, ['分镜提示词', '分镜提示', '镜头提示词', '镜头提示', 'shot_prompt', 'shot_description']);
             const remarkIndexes = findRemarkColumnIndexes(headers, [problemIndex, scriptIndex, shotIndex, scriptPromptIndex, shotPromptIndex, ...tagIndexes]);
 
-            if (problemIndex === -1 || tagIndexes.length === 0) {
+            if (tagIndexes.length === 0) {
                 return {
                     document_info: {
                         total_records: records.length - 1,
@@ -6152,7 +6154,7 @@ ${keywordFilter}
                     top_problems: [],
                     dimension_statistics: {},
                     total_problems: 0,
-                    analysis_summary: `无法识别表格列。检测到的列名：${headers.join('、')}。请确保包含"问题描述"和"标签"列。`,
+                    analysis_summary: `无法识别问题归因列。检测到的列名：${headers.join('、')}。`,
                     gsb_statistics: null
                 };
             }
@@ -6169,10 +6171,12 @@ ${keywordFilter}
                 if (!line) continue;
 
                 const parts = parseCSVLine(line);
-                const problem = (parts[problemIndex] || '').trim();
                 // 保留不同问题归因列中的独立标签引用；即使名称相同也分别计数。
-                const rowTags = getProblemAttributionEntries(parts, tagIndexes, headers)
-                    .map(entry => entry.tag);
+                const attributionEntries = getProblemAttributionEntries(parts, tagIndexes, headers);
+                const rowTags = attributionEntries.map(entry => entry.tag);
+                const problem = attributionEntries
+                    .map(entry => getRemarkForAttributionEntry(parts, headers, remarkIndexes, entry))
+                    .filter(Boolean).join('\n');
                 const gsbTags = getUniqueRowTags(parts, allTagIndexes);
                 const script = scriptIndex !== -1 ? (parts[scriptIndex] || '').trim() : sheetName;
 
@@ -6226,17 +6230,16 @@ ${keywordFilter}
                 if (!line) continue;
                 
                 const parts = parseCSVLine(line);
-                const problem = (parts[problemIndex] || '').trim();
-                const rowTags = getUniqueProblemAttributionTags(parts, tagIndexes, headers);
-                const script = scriptIndex !== -1 ? (parts[scriptIndex] || '').trim() : sheetName;
+                const attributionEntries = getProblemAttributionEntries(parts, tagIndexes, headers);
+                const script = sheetName || (scriptIndex !== -1 ? (parts[scriptIndex] || '').trim() : '');
                 const shot = shotIndex !== -1 ? (parts[shotIndex] || '').trim() : '';
                 const scriptPrompt = scriptPromptIndex !== -1 ? (parts[scriptPromptIndex] || '').trim() : '';
                 const shotPrompt = shotPromptIndex !== -1 ? (parts[shotPromptIndex] || '').trim() : '';
-                const remark = getRowRemark(parts, remarkIndexes);
-                
-                if (!problem) continue;
-                
-                rowTags.forEach(cleanTag => {
+                attributionEntries.forEach(entry => {
+                    const cleanTag = entry.tag;
+                    const remark = getRemarkForAttributionEntry(parts, headers, remarkIndexes, entry);
+                    const problem = remark;
+                    if (!problem) return;
                     if (!tagProblemsMap[cleanTag]) tagProblemsMap[cleanTag] = [];
                     const problemItem = { description: problem, script: script || '未识别剧本', shot: shot || '未识别分镜', scriptPrompt, shotPrompt, remark };
                     const exists = tagProblemsMap[cleanTag].some(item =>
@@ -6286,18 +6289,22 @@ ${keywordFilter}
                 if (!line) continue;
 
                 const parts = parseCSVLine(line);
-                const problem = (parts[problemIndex] || '').trim();
                 const attributionEntries = getProblemAttributionEntries(parts, tagIndexes, headers);
                 const rowTags = attributionEntries.map(entry => entry.tag);
-                const script = scriptIndex !== -1 ? (parts[scriptIndex] || '').trim() : sheetName;
+                const script = sheetName || (scriptIndex !== -1 ? (parts[scriptIndex] || '').trim() : '');
                 const shot = shotIndex !== -1 ? (parts[shotIndex] || '').trim() : '';
                 const scriptPrompt = scriptPromptIndex !== -1 ? (parts[scriptPromptIndex] || '').trim() : '';
                 const shotPrompt = shotPromptIndex !== -1 ? (parts[shotPromptIndex] || '').trim() : '';
-                const remark = getRowRemark(parts, remarkIndexes);
+                const problem = attributionEntries
+                    .map(entry => getRemarkForAttributionEntry(parts, headers, remarkIndexes, entry))
+                    .filter(Boolean).join('\n');
 
                 if (!problem && rowTags.length === 0) continue;
                 
-                attributionEntries.forEach(({ tag: cleanTag, dimension }) => {
+                attributionEntries.forEach((entry) => {
+                    const { tag: cleanTag, dimension } = entry;
+                    const remark = getRemarkForAttributionEntry(parts, headers, remarkIndexes, entry);
+                    const entryProblem = remark;
                     if (dimension && dimensionTagCounts[dimension]) {
                         if (!dimensionTagCounts[dimension][cleanTag]) {
                             dimensionTagCounts[dimension][cleanTag] = 0;
@@ -6305,10 +6312,10 @@ ${keywordFilter}
                         }
                         dimensionTagCounts[dimension][cleanTag]++;
                         
-                        if (problem) {
-                            const problemItem = { description: problem, script: script || '未识别剧本', shot: shot || '未识别分镜', scriptPrompt, shotPrompt, remark };
+                        if (entryProblem) {
+                            const problemItem = { description: entryProblem, script: script || '未识别剧本', shot: shot || '未识别分镜', scriptPrompt, shotPrompt, remark };
                             const exists = dimensionTagProblems[dimension][cleanTag].some(item =>
-                                normalizeProblemText(item) === problem &&
+                                normalizeProblemText(item) === entryProblem &&
                                 normalizeProblemScript(item) === problemItem.script &&
                                 normalizeProblemShot(item) === problemItem.shot &&
                                 normalizeProblemRemark(item) === problemItem.remark
@@ -6318,7 +6325,7 @@ ${keywordFilter}
                             }
                         }
                         
-                        const problemKey = problem || `第${i}行`;
+                        const problemKey = entryProblem || `第${i}行`;
                         if (!dimensionProblemTags[dimension][problemKey]) {
                             dimensionProblemTags[dimension][problemKey] = new Set();
                         }
@@ -6511,6 +6518,49 @@ ${keywordFilter}
             for (const index of remarkIndexes) {
                 const remark = String(parts[index] || '').trim();
                 if (remark) return remark;
+            }
+            return '';
+        }
+
+        function normalizeRemarkSectionTitle(value) {
+            return String(value || '')
+                .toLowerCase()
+                .replace(/问题/g, '')
+                .replace(/内容理解性/g, '内容可理解性')
+                .replace(/[\s\p{P}\p{S}]+/gu, '');
+        }
+
+        function extractRemarkSectionForTag(remark, tag) {
+            const source = String(remark || '').replace(/\r\n?/g, '\n').trim();
+            if (!source) return '';
+            const target = normalizeRemarkSectionTitle(tag);
+            const titlePattern = target === '内容可理解性'
+                ? '内容(?:可)?理解性(?:问题)?'
+                : target === '原视频还原度'
+                    ? '原视频还原度(?:问题)?'
+                    : target === '叙事节奏质量'
+                        ? '叙事节奏质量(?:问题)?'
+                        : String(tag || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const headerPattern = new RegExp(`(?:^|\\n)\\s*(?:\\d+\\s*[.、)）]\\s*)?${titlePattern}`, 'i');
+            const match = headerPattern.exec(source);
+            if (!match) return '';
+            const start = match.index + (match[0].startsWith('\n') ? 1 : 0);
+            const remaining = source.slice(start);
+            const nextHeader = /\n\s*\d+\s*[.、)）]\s*[^\n]+/.exec(remaining.slice(1));
+            const end = nextHeader ? start + 1 + nextHeader.index : source.length;
+            return source.slice(start, end)
+                .replace(/^\s*\d+\s*[.、)）]\s*/, '')
+                .trim();
+        }
+
+        function getRemarkForAttributionEntry(parts, headers, remarkIndexes, entry) {
+            const sameDimensionIndexes = remarkIndexes.filter(index =>
+                getAttributionColumnDimension(headers[index]) === entry.dimension
+            );
+            const candidates = sameDimensionIndexes.length ? sameDimensionIndexes : remarkIndexes;
+            for (const index of candidates) {
+                const section = extractRemarkSectionForTag(parts[index], entry.tag);
+                if (section) return section;
             }
             return '';
         }
