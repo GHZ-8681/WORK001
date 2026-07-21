@@ -861,6 +861,95 @@
             font-weight: 800;
         }
 
+        .ai-summary-dimension {
+            margin-bottom: 24px;
+            border: 1px solid var(--border-light);
+            border-radius: 18px;
+            overflow: hidden;
+            background: #fff;
+        }
+
+        .ai-summary-dimension-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 16px 20px;
+            background: linear-gradient(135deg, var(--summary-bg), #fff);
+            color: var(--text-primary);
+            font-size: 1rem;
+            font-weight: 800;
+            border-left: 4px solid var(--summary-color);
+        }
+
+        .ai-summary-dimension-title span:last-child {
+            color: var(--summary-color);
+            font-size: 0.78rem;
+        }
+
+        .ai-summary-table-wrap { overflow-x: auto; }
+
+        .ai-summary-table {
+            width: 100%;
+            min-width: 880px;
+            border-collapse: collapse;
+            table-layout: fixed;
+        }
+
+        .ai-summary-table th,
+        .ai-summary-table td {
+            padding: 13px 15px;
+            border-bottom: 1px solid var(--border-light);
+            text-align: left;
+            vertical-align: top;
+            line-height: 1.7;
+        }
+
+        .ai-summary-table th {
+            background: #f8faff;
+            color: var(--text-secondary);
+            font-size: 0.76rem;
+            font-weight: 800;
+        }
+
+        .ai-summary-table th:nth-child(1) { width: 90px; }
+        .ai-summary-table th:nth-child(2) { width: 170px; }
+        .ai-summary-table th:nth-child(3) { width: 80px; }
+        .ai-summary-table th:nth-child(4) { width: 80px; }
+
+        .ai-summary-table td {
+            color: var(--text-primary);
+            font-size: 0.84rem;
+        }
+
+        .ai-summary-level {
+            display: inline-flex;
+            padding: 4px 9px;
+            border-radius: 999px;
+            color: var(--summary-color);
+            background: var(--summary-bg);
+            font-weight: 800;
+            white-space: nowrap;
+        }
+
+        .ai-summary-category { font-weight: 800; }
+        .ai-summary-text { color: var(--text-secondary); white-space: normal; }
+        .ai-summary-empty { color: var(--text-muted); }
+
+        .ai-overall-summary {
+            margin-top: 10px;
+            border: 1px solid var(--border-light);
+            border-radius: 16px;
+            overflow: hidden;
+        }
+
+        .ai-overall-summary td:first-child {
+            width: 120px;
+            background: #f8faff;
+            color: var(--primary-color);
+            font-weight: 800;
+        }
+
         .progress-bar {
             height: 8px;
             background: var(--bg-tertiary);
@@ -5462,16 +5551,18 @@
 4. 不要改写备注，不要返回备注全文，只返回案例ID；
 5. 数据不足5条时按实际数量返回，禁止虚构。
 6. 若备注包含“美学：……”“动作：……”等下一级标题，优先沿用该标题语义进行归类，且案例必须保留对应标题下的原始备注。
+7. 必须提供三层总结：dimension的summary总结该大维度整体特征；tag的summary总结该子维度；sub_tag的summary总结该小问题。每条总结60至150字，只能依据本层级备注，需说明主要现象、集中问题和影响，不得跨维度混用。
+8. overall_summary用150至300字比较三个大维度的主要差异并给出优先优化方向。
 ${keyword ? `仅分析包含关键词“${keyword}”的记录。` : ''}
 
 输入记录：
 ${JSON.stringify(modelRows)}
 
 只返回合法JSON对象，结构必须是：
-{"dimension_statistics":{
-"全局维度":{"top_tags":[{"tag":"原表标签名","sub_tags":[{"name":"10字以内小问题","count":0,"problems":[{"id":"案例ID"}]}]}]},
-"分镜之间":{"top_tags":[{"tag":"原表标签名","sub_tags":[{"name":"10字以内小问题","count":0,"problems":[{"id":"案例ID"}]}]}]},
-"单分镜":{"top_tags":[{"tag":"原表标签名","sub_tags":[{"name":"10字以内小问题","count":0,"problems":[{"id":"案例ID"}]}]}]}
+{"overall_summary":"三大维度综合总结","dimension_statistics":{
+"全局维度":{"summary":"全局维度总结","top_tags":[{"tag":"原表标签名","summary":"子维度总结","sub_tags":[{"name":"10字以内小问题","count":0,"summary":"小问题分类总结","problems":[{"id":"案例ID"}]}]}]},
+"分镜之间":{"summary":"分镜之间总结","top_tags":[{"tag":"原表标签名","summary":"子维度总结","sub_tags":[{"name":"10字以内小问题","count":0,"summary":"小问题分类总结","problems":[{"id":"案例ID"}]}]}]},
+"单分镜":{"summary":"单分镜总结","top_tags":[{"tag":"原表标签名","summary":"子维度总结","sub_tags":[{"name":"10字以内小问题","count":0,"summary":"小问题分类总结","problems":[{"id":"案例ID"}]}]}]}
 }}`;
         }
 
@@ -5802,6 +5893,7 @@ ${keywordFilter}
                 const dimTotal = dimData.total_count || dimTopTags.reduce((sum, t) => sum + (t.count || 0), 0);
                 
                 normalizedDimStats[dimName] = {
+                    summary: dimData.summary || '',
                     total_count: dimTotal,
                     tag_count: dimData.tag_count || dimTopTags.length,
                     total_problems: dimData.total_problems || 0,
@@ -5809,6 +5901,7 @@ ${keywordFilter}
                         const tagName = t.tag || '未知标签';
                         return {
                             tag: tagName,
+                            summary: t.summary || '',
                             count: t.count || 0,
                             percentage: t.percentage || (dimTotal > 0 ? ((t.count || 0) / dimTotal * 100).toFixed(1) : '0'),
                             problems: ((t.problems && t.problems.length > 0) ? t.problems : (topTagProblems[tagName] || [])).slice(0, 15),
@@ -5818,6 +5911,7 @@ ${keywordFilter}
                                 .map((subTag, index) => ({
                                     name: subTag.name || subTag.tag || subTag.label || `问题类型${index + 1}`,
                                     count: Number(subTag.count) || (subTag.problems || subTag.cases || []).length,
+                                    summary: subTag.summary || '',
                                     problems: (subTag.problems || subTag.cases || []).slice(0, 5)
                                 }))
                         };
@@ -5835,7 +5929,7 @@ ${keywordFilter}
                 top_tags: topTags,
                 dimension_statistics: normalizedDimStats,
                 total_problems: aiResult.total_problems || (aiResult.top_problems || []).length,
-                analysis_summary: aiResult.analysis_summary || '暂无分析总结',
+                analysis_summary: aiResult.overall_summary || aiResult.analysis_summary || '暂无分析总结',
                 gsb_statistics: aiResult.gsb_statistics || null
             };
         }
@@ -5891,6 +5985,7 @@ ${keywordFilter}
 
                 merged[dimension] = {
                     ...localDimension,
+                    summary: aiDimensions?.[dimension]?.summary || localDimension.summary || '',
                     total_count: Number(localDimension.total_count) || 0,
                     tag_count: Number(localDimension.tag_count) || 0,
                     total_problems: Number(localDimension.total_problems) || 0,
@@ -5898,6 +5993,7 @@ ${keywordFilter}
                         const aiTag = aiTagMap.get(String(localTag?.tag || '').trim());
                         return {
                             ...localTag,
+                            summary: aiTag?.summary || localTag.summary || '',
                             count: Number(localTag.count) || 0,
                             percentage: localTag.percentage,
                             problems: localTag.problems || [],
@@ -8175,6 +8271,7 @@ ${keywordFilter}
                     .slice(0, 3).map((item, index) => ({
                     name: item.name || item.tag || item.label || `问题类型${index + 1}`,
                     count: Number(item.count) || (item.problems || item.cases || []).length,
+                    summary: item.summary || '',
                     problems: [...(item.problems || item.cases || [])]
                 }));
 
@@ -8354,13 +8451,120 @@ ${keywordFilter}
             document.getElementById('ptabSingle').style.display = tabName === 'single' ? 'block' : 'none';
         }
 
+        function cleanSummaryText(value) {
+            return String(value || '')
+                .replace(/<br\s*\/?\s*>/gi, ' ')
+                .replace(/<[^>]+>/g, ' ')
+                .replace(/&nbsp;/gi, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+        }
+
+        function buildLayerSummary(problems = [], fallback = '') {
+            const remarks = [];
+            const seen = new Set();
+            problems.forEach(problem => {
+                const remark = normalizeProblemRemark(problem).trim();
+                if (!remark || remark === '无') return;
+                const normalized = normalizeRemarkMatchText(remark);
+                if (!normalized || seen.has(normalized)) return;
+                seen.add(normalized);
+                remarks.push(remark.length > 90 ? `${remark.slice(0, 90)}…` : remark);
+            });
+            if (remarks.length) return `备注主要集中在：${remarks.slice(0, 2).join('；')}。`;
+            return fallback || '暂无明确备注，当前仅保留标签数量、剧本名和分镜号。';
+        }
+
+        function renderSummaryTableRow(level, category, count, percentage, summary) {
+            return `
+                <tr>
+                    <td><span class="ai-summary-level">${escapeHtml(level)}</span></td>
+                    <td class="ai-summary-category">${escapeHtml(category)}</td>
+                    <td>${Number(count) || 0}</td>
+                    <td>${escapeHtml(String(percentage || '0'))}%</td>
+                    <td class="ai-summary-text ${summary ? '' : 'ai-summary-empty'}">${escapeHtml(summary || '暂无总结')}</td>
+                </tr>
+            `;
+        }
+
         function renderAnalysisSummary(result) {
             const container = document.getElementById('analysisSummary');
             if (!container) return;
-            
+
+            const dimensions = result.dimension_statistics || {};
+            const totalTags = Number(result.tag_summary?.total_tags) || Object.values(dimensions)
+                .reduce((sum, item) => sum + (Number(item?.total_count) || 0), 0);
+            const dimensionSections = Object.keys(DIMENSION_CONFIG).map(dimensionName => {
+                const config = DIMENSION_CONFIG[dimensionName];
+                const dimension = dimensions[dimensionName] || { total_count: 0, top_tags: [] };
+                const dimensionTotal = Number(dimension.total_count) || 0;
+                const dimensionPercentage = totalTags > 0 ? (dimensionTotal / totalTags * 100).toFixed(1) : '0.0';
+                const topTags = dimension.top_tags || [];
+                const dimensionProblems = topTags.flatMap(tag => tag.problems || []);
+                const topTagNames = topTags.slice(0, 3).map(tag => tag.tag).filter(Boolean);
+                const dimensionFallback = topTagNames.length
+                    ? `${dimensionName}共记录${dimensionTotal}次，主要集中在${topTagNames.join('、')}。${buildLayerSummary(dimensionProblems)}`
+                    : `${dimensionName}暂无有效标签记录。`;
+                const rows = [renderSummaryTableRow(
+                    '大维度',
+                    dimensionName,
+                    dimensionTotal,
+                    dimensionPercentage,
+                    cleanSummaryText(dimension.summary) || dimensionFallback
+                )];
+
+                topTags.forEach(tag => {
+                    const tagCount = Number(tag.count) || 0;
+                    const tagPercentage = dimensionTotal > 0 ? (tagCount / dimensionTotal * 100).toFixed(1) : '0.0';
+                    rows.push(renderSummaryTableRow(
+                        '子维度',
+                        tag.tag || '未命名标签',
+                        tagCount,
+                        tagPercentage,
+                        cleanSummaryText(tag.summary) || buildLayerSummary(tag.problems || [], `${tag.tag || '该标签'}暂无明确备注。`)
+                    ));
+
+                    normalizeProblemSubtags(tag).forEach(subTag => {
+                        const subCount = Number(subTag.count) || (subTag.problems || []).length;
+                        const subPercentage = tagCount > 0 ? (subCount / tagCount * 100).toFixed(1) : '0.0';
+                        rows.push(renderSummaryTableRow(
+                            '小问题',
+                            subTag.name || '未分类问题',
+                            subCount,
+                            subPercentage,
+                            cleanSummaryText(subTag.summary) || buildLayerSummary(
+                                subTag.problems || [],
+                                subTag.name === '未填写备注'
+                                    ? '该分类存在问题归因标签，但原表未填写对应备注。'
+                                    : `${subTag.name || '该问题'}暂无可提取的详细备注。`
+                            )
+                        ));
+                    });
+                });
+
+                return `
+                    <section class="ai-summary-dimension" style="--summary-color:${config.color}; --summary-bg:${config.bgColor};">
+                        <div class="ai-summary-dimension-title">
+                            <span>${config.icon || '📁'} ${escapeHtml(dimensionName)}多维度总结</span>
+                            <span>${dimensionTotal} 次 · ${dimensionPercentage}%</span>
+                        </div>
+                        <div class="ai-summary-table-wrap">
+                            <table class="ai-summary-table">
+                                <thead><tr><th>总结层级</th><th>分类</th><th>数量</th><th>占比</th><th>问题总结</th></tr></thead>
+                                <tbody>${rows.join('')}</tbody>
+                            </table>
+                        </div>
+                    </section>
+                `;
+            }).join('');
+
+            const overallSummary = cleanSummaryText(result.analysis_summary);
             container.innerHTML = `
                 <div class="analysis-section">
-                    <div class="analysis-content">${result.analysis_summary}</div>
+                    ${dimensionSections}
+                    <table class="ai-summary-table ai-overall-summary">
+                        <tbody><tr><td>综合分析</td><td class="ai-summary-text">${escapeHtml(overallSummary && overallSummary !== '暂无分析总结' ? overallSummary : '已按全局维度、分镜之间和单分镜完成分层统计；请优先处理数量和占比较高的子维度及小问题。')}</td></tr></tbody>
+                    </table>
                 </div>
             `;
         }
