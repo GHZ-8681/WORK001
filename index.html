@@ -1020,23 +1020,33 @@
         .ai-summary-text { color: var(--text-secondary); white-space: normal; }
         .ai-summary-empty { color: var(--text-muted); }
 
+        .ai-summary-detail-row td {
+            padding: 0 16px 14px !important;
+            border-top: 0 !important;
+            background: inherit;
+        }
+
         .ai-summary-detail {
             width: 100%;
-            border: 1px solid transparent;
-            border-radius: 11px;
-            transition: background 0.2s ease, border-color 0.2s ease;
+            border: 1px solid #e4eaf6;
+            border-radius: 12px;
+            background: #fff;
+            overflow: hidden;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
         }
 
         .ai-summary-detail[open] {
-            padding: 9px 11px 11px;
-            border-color: color-mix(in srgb, var(--summary-color) 18%, #e3e9f4);
-            background: #fff;
+            border-color: color-mix(in srgb, var(--summary-color) 32%, #dfe6f3);
+            box-shadow: 0 7px 20px rgba(38, 60, 110, 0.07);
         }
 
         .ai-summary-detail summary {
-            display: inline-flex;
+            display: flex;
             align-items: center;
+            justify-content: space-between;
             gap: 7px;
+            width: 100%;
+            padding: 10px 13px;
             color: var(--summary-color);
             font-size: 0.8rem;
             font-weight: 800;
@@ -1061,8 +1071,7 @@
         .ai-summary-detail[open] summary::after { transform: rotate(180deg); }
 
         .ai-summary-detail-content {
-            margin-top: 10px;
-            padding-top: 10px;
+            padding: 13px 15px 15px;
             border-top: 1px solid #edf0f6;
             color: var(--text-secondary);
             font-size: 0.83rem;
@@ -5384,15 +5393,12 @@
 
             try {
                 if (window.location.hostname.endsWith('github.io')) {
-                    // 静态站点先用原表立即展示确定性统计，AI 在后台补充结果。
-                    // 避免大文档必须等待模型生成 45 个完整案例后才能看到页面。
-                    const immediateResult = parseAndAnalyze(csvData);
-                    displayResult(immediateResult);
-                    analyzeWithDirectAPI(csvData, apiKey)
-                        .then(result => displayResult(calibrateAnalysisResult(result, csvData)))
-                        .catch(error => {
-                            console.warn('后台AI分析未完成，保留本地精确统计:', error.message);
-                        });
+                    // 结果只落屏一次：避免先显示本地规则分类、随后再被模型聚类
+                    // 覆盖，从而造成小问题名称和案例列表发生视觉跳变。
+                    updateLoadingCard('正在调用模型梳理问题分类...', 62);
+                    const result = await analyzeWithDirectAPI(csvData, apiKey);
+                    updateLoadingCard('正在校准标签数量和案例...', 92);
+                    displayResult(calibrateAnalysisResult(result, csvData));
                     return;
                 }
 
@@ -8631,7 +8637,10 @@ ${keywordFilter}
                     <td class="ai-summary-category">${escapeHtml(category)}</td>
                     <td class="ai-summary-number">${Number(count) || 0}</td>
                     <td class="ai-summary-percent">${escapeHtml(String(percentage || '0'))}%</td>
-                    <td class="ai-summary-text ${summary ? '' : 'ai-summary-empty'}">
+                    <td class="ai-summary-text ${summary ? '' : 'ai-summary-empty'}"></td>
+                </tr>
+                <tr class="ai-summary-detail-row ${rowClass}">
+                    <td colspan="4" class="ai-summary-text ${summary ? '' : 'ai-summary-empty'}">
                         ${summary ? `
                             <details class="ai-summary-detail">
                                 <summary>查看详细描述</summary>
