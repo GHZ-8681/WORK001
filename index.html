@@ -1221,6 +1221,93 @@
         .ai-dashboard-rank-row:last-child { border-bottom: 0; }
         .ai-dashboard-rank-row:hover { background: #fafcff; }
 
+        button.ai-dashboard-rank-row {
+            width: 100%;
+            border: 0;
+            border-bottom: 1px solid #eef1f6;
+            background: transparent;
+            font-family: inherit;
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .ai-dashboard-rank-row.is-expanded {
+            background: color-mix(in srgb, var(--summary-color) 6%, #fff);
+        }
+
+        .ai-dashboard-tag-arrow {
+            display: inline-flex;
+            margin-left: 7px;
+            color: var(--summary-color);
+            transition: transform 0.2s ease;
+        }
+
+        .ai-dashboard-rank-row.is-expanded .ai-dashboard-tag-arrow { transform: rotate(180deg); }
+
+        .ai-dashboard-sub-list {
+            display: none;
+            padding: 5px 10px 8px 42px;
+            background: #fbfcff;
+            border-bottom: 1px solid #e9edf5;
+        }
+
+        .ai-dashboard-sub-list.show { display: block; }
+
+        .ai-dashboard-sub-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 48px;
+            gap: 8px;
+            align-items: center;
+            width: 100%;
+            min-height: 35px;
+            padding: 6px 9px;
+            border: 0;
+            border-radius: 8px;
+            background: transparent;
+            color: var(--text-secondary);
+            font-family: inherit;
+            font-size: 0.74rem;
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .ai-dashboard-sub-row:hover,
+        .ai-dashboard-sub-row.active {
+            color: var(--summary-color);
+            background: color-mix(in srgb, var(--summary-color) 9%, #fff);
+        }
+
+        .ai-dashboard-sub-row span:last-child { text-align: right; font-weight: 800; }
+
+        .ai-dashboard-detail-panel { display: none; }
+        .ai-dashboard-detail-panel.active { display: block; }
+
+        .ai-dashboard-detail-heading {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 12px;
+            color: var(--text-primary);
+            font-size: 0.9rem;
+            font-weight: 850;
+        }
+
+        .ai-dashboard-detail-heading span:last-child {
+            color: var(--summary-color);
+            font-size: 0.72rem;
+        }
+
+        .ai-dashboard-detail-copy {
+            padding: 16px;
+            border: 1px solid color-mix(in srgb, var(--summary-color) 22%, #e3e8f2);
+            border-radius: 12px;
+            background: color-mix(in srgb, var(--summary-bg) 42%, #fff);
+            color: var(--text-secondary);
+            font-size: 0.82rem;
+            line-height: 1.82;
+        }
+
         .ai-dashboard-rank-index {
             display: grid;
             place-items: center;
@@ -8860,67 +8947,94 @@ ${keywordFilter}
             `;
         }
 
-        function renderDashboardRankRows(topTags, dimensionTotal) {
-            const items = [];
-            (topTags || []).forEach(tag => {
+        function renderDashboardTagTree(topTags, dimensionTotal, dashboardId) {
+            return (topTags || []).map((tag, tagIndex) => {
                 const tagCount = Number(tag.count) || 0;
-                items.push({ name: tag.tag || '未命名标签', type: '子维度', count: tagCount });
-                normalizeProblemSubtags(tag).forEach(subTag => {
-                    items.push({
-                        name: subTag.name || '未分类问题',
-                        type: '小问题',
-                        count: Number(subTag.count) || (subTag.problems || []).length
-                    });
-                });
-            });
-            return items
-                .sort((a, b) => b.count - a.count)
-                .slice(0, 5)
-                .map((item, index) => {
-                    const percentage = dimensionTotal > 0 ? (item.count / dimensionTotal * 100).toFixed(1) : '0.0';
-                    return `
-                        <div class="ai-dashboard-rank-row">
-                            <span class="ai-dashboard-rank-index">${index + 1}</span>
-                            <span class="ai-dashboard-rank-name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}<small>${item.type}</small></span>
-                            <span class="ai-dashboard-rank-count">${item.count}</span>
-                            <span class="ai-dashboard-rank-percent">${percentage}%</span>
-                        </div>
-                    `;
-                }).join('');
+                const tagPercentage = dimensionTotal > 0 ? (tagCount / dimensionTotal * 100).toFixed(1) : '0.0';
+                const subtags = normalizeProblemSubtags(tag).slice(0, 5);
+                const subRows = subtags.map((subTag, subIndex) => `
+                    <button class="ai-dashboard-sub-row" type="button"
+                        data-dashboard-sub="${dashboardId}-${tagIndex}-${subIndex}"
+                        onclick="showDashboardDetail('${dashboardId}', ${tagIndex}, ${subIndex})">
+                        <span>${escapeHtml(subTag.name || '未分类问题')}</span>
+                        <span>${Number(subTag.count) || (subTag.problems || []).length} 次</span>
+                    </button>
+                `).join('');
+                return `
+                    <button class="ai-dashboard-rank-row" type="button"
+                        data-dashboard-tag="${dashboardId}-${tagIndex}"
+                        aria-expanded="false"
+                        onclick="toggleDashboardTag('${dashboardId}', ${tagIndex})">
+                        <span class="ai-dashboard-rank-index">${tagIndex + 1}</span>
+                        <span class="ai-dashboard-rank-name" title="${escapeHtml(tag.tag || '未命名标签')}">${escapeHtml(tag.tag || '未命名标签')}<span class="ai-dashboard-tag-arrow">⌄</span></span>
+                        <span class="ai-dashboard-rank-count">${tagCount}</span>
+                        <span class="ai-dashboard-rank-percent">${tagPercentage}%</span>
+                    </button>
+                    <div class="ai-dashboard-sub-list" data-dashboard-sub-list="${dashboardId}-${tagIndex}">
+                        ${subRows || '<div class="ai-summary-empty">该标签暂无可展开的小问题</div>'}
+                    </div>
+                `;
+            }).join('');
         }
 
-        function renderDashboardInsights(topTags, dimensionSummary) {
-            const details = [`
-                <details class="ai-dashboard-detail" open>
-                    <summary>维度整体总结</summary>
-                    <div class="ai-dashboard-detail-body">${escapeHtml(dimensionSummary)}</div>
-                </details>
+        function renderDashboardDetailPanels(topTags, dimensionSummary, dashboardId) {
+            const panels = [`
+                <div class="ai-dashboard-detail-panel active" data-dashboard-detail-panel="${dashboardId}-overview">
+                    <div class="ai-dashboard-detail-heading"><span>维度整体总结</span><span>默认概览</span></div>
+                    <div class="ai-dashboard-detail-copy">${escapeHtml(dimensionSummary)}</div>
+                </div>
             `];
-            (topTags || []).forEach(tag => {
-                const tagSummary = cleanSummaryText(tag.summary)
-                    || buildLayerSummary(tag.problems || [], `${tag.tag || '该标签'}暂无明确备注。`);
-                details.push(`
-                    <details class="ai-dashboard-detail">
-                        <summary>${escapeHtml(tag.tag || '未命名标签')} · 查看详细描述</summary>
-                        <div class="ai-dashboard-detail-body">${escapeHtml(tagSummary)}</div>
-                    </details>
-                `);
-                normalizeProblemSubtags(tag).slice(0, 3).forEach(subTag => {
+            (topTags || []).forEach((tag, tagIndex) => {
+                normalizeProblemSubtags(tag).slice(0, 5).forEach((subTag, subIndex) => {
                     const subSummary = cleanSummaryText(subTag.summary) || buildLayerSummary(
                         subTag.problems || [],
                         subTag.name === '未填写备注'
                             ? '该分类存在问题归因标签，但原表未填写对应备注。'
                             : `${subTag.name || '该问题'}暂无可提取的详细备注。`
                     );
-                    details.push(`
-                        <details class="ai-dashboard-detail">
-                            <summary>${escapeHtml(subTag.name || '未分类问题')} · 查看详细描述</summary>
-                            <div class="ai-dashboard-detail-body">${escapeHtml(subSummary)}</div>
-                        </details>
+                    panels.push(`
+                        <div class="ai-dashboard-detail-panel" data-dashboard-detail-panel="${dashboardId}-${tagIndex}-${subIndex}">
+                            <div class="ai-dashboard-detail-heading">
+                                <span>${escapeHtml(subTag.name || '未分类问题')}</span>
+                                <span>${escapeHtml(tag.tag || '未命名标签')}</span>
+                            </div>
+                            <div class="ai-dashboard-detail-copy">${escapeHtml(subSummary)}</div>
+                        </div>
                     `);
                 });
             });
-            return details.join('');
+            return panels.join('');
+        }
+
+        function toggleDashboardTag(dashboardId, tagIndex) {
+            const card = document.getElementById(dashboardId);
+            if (!card) return;
+            const tagButton = card.querySelector(`[data-dashboard-tag="${dashboardId}-${tagIndex}"]`);
+            const subList = card.querySelector(`[data-dashboard-sub-list="${dashboardId}-${tagIndex}"]`);
+            if (!tagButton || !subList) return;
+            const shouldOpen = !subList.classList.contains('show');
+            card.querySelectorAll('[data-dashboard-sub-list]').forEach(item => item.classList.remove('show'));
+            card.querySelectorAll('[data-dashboard-tag]').forEach(item => {
+                item.classList.remove('is-expanded');
+                item.setAttribute('aria-expanded', 'false');
+            });
+            if (shouldOpen) {
+                subList.classList.add('show');
+                tagButton.classList.add('is-expanded');
+                tagButton.setAttribute('aria-expanded', 'true');
+            }
+        }
+
+        function showDashboardDetail(dashboardId, tagIndex, subIndex) {
+            const card = document.getElementById(dashboardId);
+            if (!card) return;
+            const key = `${dashboardId}-${tagIndex}-${subIndex}`;
+            card.querySelectorAll('[data-dashboard-detail-panel]').forEach(panel => {
+                panel.classList.toggle('active', panel.dataset.dashboardDetailPanel === key);
+            });
+            card.querySelectorAll('[data-dashboard-sub]').forEach(button => {
+                button.classList.toggle('active', button.dataset.dashboardSub === key);
+            });
         }
 
         function renderAnalysisSummary(result) {
@@ -8930,7 +9044,7 @@ ${keywordFilter}
             const dimensions = result.dimension_statistics || {};
             const totalTags = Number(result.tag_summary?.total_tags) || Object.values(dimensions)
                 .reduce((sum, item) => sum + (Number(item?.total_count) || 0), 0);
-            const dimensionSections = Object.keys(DIMENSION_CONFIG).map(dimensionName => {
+            const dimensionSections = Object.keys(DIMENSION_CONFIG).map((dimensionName, dimensionIndex) => {
                 const config = DIMENSION_CONFIG[dimensionName];
                 const dimension = dimensions[dimensionName] || { total_count: 0, top_tags: [] };
                 const dimensionTotal = Number(dimension.total_count) || 0;
@@ -8942,11 +9056,12 @@ ${keywordFilter}
                     ? `${dimensionName}共记录${dimensionTotal}次，主要集中在${topTagNames.join('、')}。${buildLayerSummary(dimensionProblems)}`
                     : `${dimensionName}暂无有效标签记录。`;
                 const dimensionSummary = cleanSummaryText(dimension.summary) || dimensionFallback;
-                const rankRows = renderDashboardRankRows(topTags, dimensionTotal);
-                const insightRows = renderDashboardInsights(topTags, dimensionSummary);
+                const dashboardId = `ai_dashboard_${dimensionIndex}`;
+                const rankRows = renderDashboardTagTree(topTags, dimensionTotal, dashboardId);
+                const insightRows = renderDashboardDetailPanels(topTags, dimensionSummary, dashboardId);
 
                 return `
-                    <section class="ai-dashboard-dimension" style="--summary-color:${config.color}; --summary-bg:${config.bgColor};">
+                    <section id="${dashboardId}" class="ai-dashboard-dimension" style="--summary-color:${config.color}; --summary-bg:${config.bgColor};">
                         <div class="ai-dashboard-grid">
                             <div class="ai-dashboard-metrics">
                                 <div class="ai-dashboard-title">
@@ -8967,11 +9082,11 @@ ${keywordFilter}
                                 </div>
                             </div>
                             <div class="ai-dashboard-ranking">
-                                <div class="ai-dashboard-panel-title"><span>高频问题 TOP 5</span><span>数量 · 占比</span></div>
+                                <div class="ai-dashboard-panel-title"><span>大标签</span><span>数量 · 占比</span></div>
                                 <div class="ai-dashboard-rank-list">${rankRows || '<div class="problem-empty-card">暂无有效问题分类</div>'}</div>
                             </div>
                             <div class="ai-dashboard-insights">
-                                <div class="ai-dashboard-panel-title"><span>AI 总结与备注说明</span><span>点击展开详情</span></div>
+                                <div class="ai-dashboard-panel-title"><span>问题详细描述</span><span>点击左侧小问题查看</span></div>
                                 <div class="ai-dashboard-insight-list">${insightRows}</div>
                             </div>
                         </div>
