@@ -912,27 +912,87 @@
             font-weight: 800;
         }
 
-        .ai-summary-table th:nth-child(1) { width: 90px; }
-        .ai-summary-table th:nth-child(2) { width: 170px; }
+        .ai-summary-table th:nth-child(1) { width: 210px; }
+        .ai-summary-table th:nth-child(2) { width: 80px; }
         .ai-summary-table th:nth-child(3) { width: 80px; }
-        .ai-summary-table th:nth-child(4) { width: 80px; }
 
         .ai-summary-table td {
             color: var(--text-primary);
             font-size: 0.84rem;
         }
 
-        .ai-summary-level {
-            display: inline-flex;
-            padding: 4px 9px;
-            border-radius: 999px;
+        .ai-summary-category {
+            position: relative;
+            font-weight: 800;
+        }
+
+        .ai-summary-row-dimension td {
+            background: linear-gradient(90deg, var(--summary-bg), rgba(255,255,255,0.96));
+        }
+
+        .ai-summary-row-dimension .ai-summary-category {
+            padding-left: 16px;
             color: var(--summary-color);
-            background: var(--summary-bg);
+            font-size: 0.92rem;
+        }
+
+        .ai-summary-row-dimension .ai-summary-category::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 3px;
+            bottom: 3px;
+            width: 4px;
+            border-radius: 999px;
+            background: var(--summary-color);
+        }
+
+        .ai-summary-row-tag .ai-summary-category {
+            padding-left: 28px;
+            font-size: 0.86rem;
+        }
+
+        .ai-summary-row-tag .ai-summary-category::before {
+            content: '';
+            position: absolute;
+            left: 10px;
+            top: 50%;
+            width: 8px;
+            height: 2px;
+            background: var(--summary-color);
+            opacity: 0.55;
+        }
+
+        .ai-summary-row-problem .ai-summary-category {
+            padding-left: 46px;
+            color: var(--text-secondary);
+            font-weight: 700;
+        }
+
+        .ai-summary-row-problem .ai-summary-category::before {
+            content: '';
+            position: absolute;
+            left: 28px;
+            top: 50%;
+            width: 6px;
+            height: 6px;
+            margin-top: -3px;
+            border-radius: 50%;
+            background: var(--summary-color);
+            opacity: 0.45;
+        }
+
+        .ai-summary-number {
+            color: var(--text-primary);
             font-weight: 800;
             white-space: nowrap;
         }
 
-        .ai-summary-category { font-weight: 800; }
+        .ai-summary-percent {
+            color: var(--summary-color);
+            font-weight: 800;
+            white-space: nowrap;
+        }
         .ai-summary-text { color: var(--text-secondary); white-space: normal; }
         .ai-summary-empty { color: var(--text-muted); }
 
@@ -8476,12 +8536,16 @@ ${keywordFilter}
         }
 
         function renderSummaryTableRow(level, category, count, percentage, summary) {
+            const rowClass = level === '大维度'
+                ? 'ai-summary-row-dimension'
+                : level === '子维度'
+                    ? 'ai-summary-row-tag'
+                    : 'ai-summary-row-problem';
             return `
-                <tr>
-                    <td><span class="ai-summary-level">${escapeHtml(level)}</span></td>
+                <tr class="${rowClass}">
                     <td class="ai-summary-category">${escapeHtml(category)}</td>
-                    <td>${Number(count) || 0}</td>
-                    <td>${escapeHtml(String(percentage || '0'))}%</td>
+                    <td class="ai-summary-number">${Number(count) || 0}</td>
+                    <td class="ai-summary-percent">${escapeHtml(String(percentage || '0'))}%</td>
                     <td class="ai-summary-text ${summary ? '' : 'ai-summary-empty'}">${escapeHtml(summary || '暂无总结')}</td>
                 </tr>
             `;
@@ -8550,7 +8614,7 @@ ${keywordFilter}
                         </div>
                         <div class="ai-summary-table-wrap">
                             <table class="ai-summary-table">
-                                <thead><tr><th>总结层级</th><th>分类</th><th>数量</th><th>占比</th><th>问题总结</th></tr></thead>
+                                <thead><tr><th>分类</th><th>数量</th><th>占比</th><th>问题总结</th></tr></thead>
                                 <tbody>${rows.join('')}</tbody>
                             </table>
                         </div>
