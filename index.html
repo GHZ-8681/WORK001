@@ -5461,6 +5461,7 @@
 3. 同一个案例ID在同一大标签下只能属于一个小标签；
 4. 不要改写备注，不要返回备注全文，只返回案例ID；
 5. 数据不足5条时按实际数量返回，禁止虚构。
+6. 若备注包含“美学：……”“动作：……”等下一级标题，优先沿用该标题语义进行归类，且案例必须保留对应标题下的原始备注。
 ${keyword ? `仅分析包含关键词“${keyword}”的记录。` : ''}
 
 输入记录：
@@ -5900,8 +5901,8 @@ ${keywordFilter}
                             count: Number(localTag.count) || 0,
                             percentage: localTag.percentage,
                             problems: localTag.problems || [],
-                            // 分镜间/单分镜没有本维度明确备注时，只保留标签计数，
-                            // 不接受模型生成的小问题或案例。
+                            // 只有明确备注会交给模型聚类；无备注标签仍保留本地案例元数据，
+                            // 前端统一归入“未填写备注”并展示“无”。
                             sub_tags: (localTag.problems || []).length
                                 ? (aiTag?.sub_tags?.length ? aiTag.sub_tags : (localTag.sub_tags || []))
                                 : []
@@ -6313,11 +6314,11 @@ ${keywordFilter}
                 const shotPrompt = shotPromptIndex !== -1 ? (parts[shotPromptIndex] || '').trim() : '';
                 attributionEntries.forEach(entry => {
                     const cleanTag = entry.tag;
-                    const remark = getRemarkForAttributionEntry(parts, headers, remarkIndexes, entry);
+                    const explicitRemark = getRemarkForAttributionEntry(parts, headers, remarkIndexes, entry);
+                    const remark = explicitRemark || '无';
                     const problem = remark;
-                    if (!problem) return;
                     if (!tagProblemsMap[cleanTag]) tagProblemsMap[cleanTag] = [];
-                    const problemItem = { description: problem, script: script || '未识别剧本', shot: shot || '未识别分镜', scriptPrompt, shotPrompt, remark };
+                    const problemItem = { description: problem, script: script || '未识别剧本', shot: shot || '未识别分镜', scriptPrompt, shotPrompt, remark, hasExplicitRemark: Boolean(explicitRemark) };
                     const exists = tagProblemsMap[cleanTag].some(item =>
                         normalizeProblemText(item) === problem &&
                         normalizeProblemScript(item) === problemItem.script &&
@@ -6379,7 +6380,8 @@ ${keywordFilter}
                 
                 attributionEntries.forEach((entry) => {
                     const { tag: cleanTag, dimension } = entry;
-                    const remark = getRemarkForAttributionEntry(parts, headers, remarkIndexes, entry);
+                    const explicitRemark = getRemarkForAttributionEntry(parts, headers, remarkIndexes, entry);
+                    const remark = explicitRemark || '无';
                     const entryProblem = remark;
                     if (dimension && dimensionTagCounts[dimension]) {
                         if (!dimensionTagCounts[dimension][cleanTag]) {
@@ -6389,7 +6391,7 @@ ${keywordFilter}
                         dimensionTagCounts[dimension][cleanTag]++;
                         
                         if (entryProblem) {
-                            const problemItem = { description: entryProblem, script: script || '未识别剧本', shot: shot || '未识别分镜', scriptPrompt, shotPrompt, remark };
+                            const problemItem = { description: entryProblem, script: script || '未识别剧本', shot: shot || '未识别分镜', scriptPrompt, shotPrompt, remark, hasExplicitRemark: Boolean(explicitRemark) };
                             const exists = dimensionTagProblems[dimension][cleanTag].some(item =>
                                 normalizeProblemText(item) === entryProblem &&
                                 normalizeProblemScript(item) === problemItem.script &&
@@ -6617,12 +6619,14 @@ ${keywordFilter}
                     : target === '叙事节奏质量'
                         ? '叙事节奏质量(?:问题)?'
                         : String(tag || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            const headerPattern = new RegExp(`(?:^|\\n)\\s*(?:\\d+\\s*[.、)）]\\s*)?${titlePattern}`, 'i');
+            // 支持“美学：……”“动作：……”等分镜维度下一级标题，
+            // 标题可以位于行首，也可以由分号分隔。
+            const headerPattern = new RegExp(`(?:^|[\\n；;])\\s*(?:\\d+\\s*[.、)）]\\s*)?${titlePattern}\\s*(?:问题)?\\s*[：:]?`, 'i');
             const match = headerPattern.exec(source);
             if (!match) return '';
-            const start = match.index + (match[0].startsWith('\n') ? 1 : 0);
+            const start = match.index + (/^[\n；;]/.test(match[0]) ? 1 : 0);
             const remaining = source.slice(start);
-            const nextHeader = /\n\s*\d+\s*[.、)）]\s*[^\n]+/.exec(remaining.slice(1));
+            const nextHeader = /(?:\n|[；;])\s*(?:\d+\s*[.、)）]\s*)?[^：:\n；;]{1,20}\s*[：:]/.exec(remaining.slice(1));
             const end = nextHeader ? start + 1 + nextHeader.index : source.length;
             return source.slice(start, end)
                 .replace(/^\s*\d+\s*[.、)）]\s*/, '')
@@ -6633,8 +6637,8 @@ ${keywordFilter}
             const sameDimensionIndexes = remarkIndexes.filter(index =>
                 getAttributionColumnDimension(headers[index]) === entry.dimension
             );
-            // 分镜间和单分镜必须有各自维度的明确备注列及备注内容。
-            // 禁止借用全局备注、通用问题描述或其他维度备注生成案例。
+            // 分镜间和单分镜只读取各自维度的备注列。
+            // 没有专属备注时由案例层展示“无”，禁止借用其他维度备注。
             if (entry.dimension !== '全局维度' && !sameDimensionIndexes.length) return '';
             const candidates = sameDimensionIndexes;
             let fallbackRemark = '';
@@ -8144,8 +8148,14 @@ ${keywordFilter}
             return (rules.find(([, rule]) => rule.test(text)) || [])[0] || ['内容还原偏差', '表现细节异常', '其他典型问题'][fallbackIndex % 3];
         }
 
+        function hasExplicitProblemRemark(problem) {
+            const remark = normalizeProblemRemark(problem).trim();
+            return Boolean(remark && remark !== '无');
+        }
+
         function normalizeProblemSubtags(tag) {
             const source = tag.sub_tags || tag.subTags || tag.small_tags || [];
+            const missingRemarkProblems = (tag.problems || []).filter(problem => !hasExplicitProblemRemark(problem));
             if (source.length) {
                 const candidatePool = [];
                 const candidateKeys = new Set();
@@ -8153,6 +8163,7 @@ ${keywordFilter}
                     ...source.flatMap(item => item.problems || item.cases || []),
                     ...(tag.problems || [])
                 ].forEach(problem => {
+                    if (!hasExplicitProblemRemark(problem)) return;
                     const key = `${normalizeProblemText(problem)}|${normalizeProblemScript(problem)}|${normalizeProblemShot(problem)}`;
                     if (!key || candidateKeys.has(key)) return;
                     candidateKeys.add(key);
@@ -8184,12 +8195,20 @@ ${keywordFilter}
                         item.problems.push(problem);
                     }
                 });
+                if (missingRemarkProblems.length) {
+                    normalized.push({
+                        name: '未填写备注',
+                        count: missingRemarkProblems.length,
+                        problems: missingRemarkProblems.slice(0, 5)
+                    });
+                }
                 return normalized;
             }
 
             const uniqueProblems = [];
             const seenProblems = new Set();
             (tag.problems || []).forEach(problem => {
+                if (!hasExplicitProblemRemark(problem)) return;
                 const key = `${normalizeProblemText(problem)}|${normalizeProblemScript(problem)}|${normalizeProblemShot(problem)}`;
                 if (!key || seenProblems.has(key)) return;
                 seenProblems.add(key);
@@ -8210,12 +8229,20 @@ ${keywordFilter}
                 count: problems.length,
                 problems: problems.slice(0, 5)
             }));
+            if (missingRemarkProblems.length) {
+                result.push({
+                    name: '未填写备注',
+                    count: missingRemarkProblems.length,
+                    problems: missingRemarkProblems.slice(0, 5)
+                });
+            }
 
             const allocatedKeys = new Set();
             result.forEach(item => item.problems.forEach(problem => {
                 allocatedKeys.add(`${normalizeProblemText(problem)}|${normalizeProblemScript(problem)}|${normalizeProblemShot(problem)}`);
             }));
             result.forEach(item => {
+                if (item.name === '未填写备注') return;
                 for (const problem of uniqueProblems) {
                     if (item.problems.length >= 5) break;
                     const key = `${normalizeProblemText(problem)}|${normalizeProblemScript(problem)}|${normalizeProblemShot(problem)}`;
