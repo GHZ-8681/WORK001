@@ -9201,6 +9201,11 @@ ${keywordFilter}
             document.getElementById('emptyState').style.display = 'none';
             document.getElementById('resultSection').style.display = 'block';
             document.getElementById('resultContent').style.display = 'none';
+
+            if (window._aiLoadingInterval) {
+                clearInterval(window._aiLoadingInterval);
+                window._aiLoadingInterval = null;
+            }
             
             const steps = [
                 '🔍 正在读取文档内容...',
@@ -9241,13 +9246,24 @@ ${keywordFilter}
             if (loadingTitle) loadingTitle.textContent = title;
             if (loadingStep) loadingStep.textContent = step;
             if (loadingHint) loadingHint.textContent = hint;
+
+            // 每次真正开始新任务时创建独立进度会话，防止上一轮的
+            // 延时回调在新任务中继续改写进度。
+            window._loadingSessionId = (window._loadingSessionId || 0) + 1;
+            const sessionId = window._loadingSessionId;
+            if (window._loadingKickoffTimer) {
+                clearTimeout(window._loadingKickoffTimer);
+                window._loadingKickoffTimer = null;
+            }
             
             progressBar.style.width = '0%';
+            progressBar.dataset.progress = '0';
             if (progressPercent) progressPercent.textContent = '0%';
             
-            setTimeout(() => {
-                progressBar.style.width = '25%';
-                if (progressPercent) progressPercent.textContent = '25%';
+            window._loadingKickoffTimer = setTimeout(() => {
+                if (window._loadingSessionId !== sessionId) return;
+                updateLoadingCard(null, 25);
+                window._loadingKickoffTimer = null;
             }, 100);
             
             loadingCard.classList.add('show');
@@ -9263,8 +9279,14 @@ ${keywordFilter}
             if (title && loadingTitle) loadingTitle.textContent = title;
             
             if (percent !== null && progressBar) {
-                const safePercent = Math.max(0, Math.min(100, Math.round(percent)));
+                const requestedPercent = Math.max(0, Math.min(100, Math.round(percent)));
+                const currentPercent = Number(progressBar.dataset.progress)
+                    || parseInt(progressPercent?.textContent || '0', 10)
+                    || 0;
+                // 同一次分析的进度只能向前，阶段切换时不允许回退。
+                const safePercent = Math.max(currentPercent, requestedPercent);
                 progressBar.style.width = `${safePercent}%`;
+                progressBar.dataset.progress = String(safePercent);
                 if (progressPercent) progressPercent.textContent = `${safePercent}%`;
             }
         }
@@ -9273,14 +9295,19 @@ ${keywordFilter}
             const loadingCard = document.getElementById('loadingCard');
             const progressBar = document.getElementById('loadingProgressBar');
             const progressPercent = document.getElementById('loadingProgressPercent');
+            const sessionId = window._loadingSessionId || 0;
             
             if (progressBar) progressBar.style.width = '100%';
+            if (progressBar) progressBar.dataset.progress = '100';
             if (progressPercent) progressPercent.textContent = '100%';
             
             setTimeout(() => {
+                if ((window._loadingSessionId || 0) !== sessionId) return;
                 loadingCard.classList.remove('show');
                 setTimeout(() => {
+                    if ((window._loadingSessionId || 0) !== sessionId) return;
                     if (progressBar) progressBar.style.width = '0%';
+                    if (progressBar) progressBar.dataset.progress = '0';
                     if (progressPercent) progressPercent.textContent = '0%';
                 }, 300);
             }, 300);
