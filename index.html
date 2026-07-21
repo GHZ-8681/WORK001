@@ -4938,20 +4938,22 @@
                         currentShot = ownShot;
                         currentPrompt = String(shotPromptIndex >= 0 ? row[shotPromptIndex] || '' : '').trim();
                         currentGroupRemarks = {};
-                        remarkIndexes.forEach(index => {
-                            const remark = String(row[index] || '').trim();
-                            const dimension = getAttributionColumnDimension(headers[index]) || '全局维度';
-                            if (remark) currentGroupRemarks[dimension] = remark;
-                        });
                     }
                     if (!currentShot) return;
+
+                    // 专属备注可能写在同一分镜的续行中；在当前分镜范围内更新，
+                    // 但不同维度之间绝不互相回退或借用。
+                    remarkIndexes.forEach(index => {
+                        const remark = String(row[index] || '').trim();
+                        const dimension = getAttributionColumnDimension(headers[index]) || '全局维度';
+                        if (remark) currentGroupRemarks[dimension] = remark;
+                    });
 
                     const readDimensionTags = dimension => {
                         const tags = (attributionByDimension[dimension] || [])
                             .flatMap(index => splitTags(row[index] || ''));
                         return [...new Set(tags)].join(',');
                     };
-                    const globalRemark = currentGroupRemarks['全局维度'] || '';
                     const globalTags = readDimensionTags('全局维度');
                     const interTags = readDimensionTags('分镜之间');
                     const singleTags = readDimensionTags('单分镜');
@@ -4964,9 +4966,9 @@
                         globalTags,
                         currentGroupRemarks['全局维度'] || '',
                         interTags,
-                        currentGroupRemarks['分镜之间'] || globalRemark,
+                        currentGroupRemarks['分镜之间'] || '',
                         singleTags,
-                        currentGroupRemarks['单分镜'] || globalRemark
+                        currentGroupRemarks['单分镜'] || ''
                     ]);
                 });
             });
@@ -5400,7 +5402,7 @@
                 if (!attributionEntries.length) return;
 
                 attributionEntries.forEach((entry, entryIndex) => {
-                    const remark = getRemarkForAttributionEntry(parts, headers, remarkIndexes, entry) || description;
+                    const remark = getRemarkForAttributionEntry(parts, headers, remarkIndexes, entry);
                     if (!remark) return;
                     if (keyword && ![description, remark, entry.tag].some(value => String(value).toLowerCase().includes(keyword.toLowerCase()))) return;
                     items.push({
@@ -5898,7 +5900,11 @@ ${keywordFilter}
                             count: Number(localTag.count) || 0,
                             percentage: localTag.percentage,
                             problems: localTag.problems || [],
-                            sub_tags: aiTag?.sub_tags?.length ? aiTag.sub_tags : (localTag.sub_tags || [])
+                            // 分镜间/单分镜没有本维度明确备注时，只保留标签计数，
+                            // 不接受模型生成的小问题或案例。
+                            sub_tags: (localTag.problems || []).length
+                                ? (aiTag?.sub_tags?.length ? aiTag.sub_tags : (localTag.sub_tags || []))
+                                : []
                         };
                     })
                 };
@@ -6627,7 +6633,10 @@ ${keywordFilter}
             const sameDimensionIndexes = remarkIndexes.filter(index =>
                 getAttributionColumnDimension(headers[index]) === entry.dimension
             );
-            const candidates = sameDimensionIndexes.length ? sameDimensionIndexes : remarkIndexes;
+            // 分镜间和单分镜必须有各自维度的明确备注列及备注内容。
+            // 禁止借用全局备注、通用问题描述或其他维度备注生成案例。
+            if (entry.dimension !== '全局维度' && !sameDimensionIndexes.length) return '';
+            const candidates = sameDimensionIndexes;
             let fallbackRemark = '';
             for (const index of candidates) {
                 const rawRemark = String(parts[index] || '').trim();
@@ -6635,11 +6644,9 @@ ${keywordFilter}
                 const section = extractRemarkSectionForTag(rawRemark, entry.tag);
                 if (section) return section;
             }
-            // 参考表中分镜间/单分镜标签没有独立备注列，只提供分镜级全局备注。
-            // 此时保留同一分镜的完整备注作为案例原因，不能返回空白或借用其他分镜。
-            return entry.dimension === '全局维度' && sameDimensionIndexes.length
-                ? ''
-                : fallbackRemark;
+            // 全局备注需要命中当前全局标签段落；分镜间/单分镜的专属备注
+            // 可以直接作为该维度案例原因使用。
+            return entry.dimension === '全局维度' ? '' : fallbackRemark;
         }
 
         function isTagDescriptionColumn(header) {
@@ -8203,10 +8210,6 @@ ${keywordFilter}
                 count: problems.length,
                 problems: problems.slice(0, 5)
             }));
-            const fallbackNames = ['内容还原偏差', '表现细节异常', '其他典型问题'];
-            while (result.length < 3) {
-                result.push({ name: fallbackNames[result.length], count: 0, problems: [] });
-            }
 
             const allocatedKeys = new Set();
             result.forEach(item => item.problems.forEach(problem => {
@@ -8244,7 +8247,9 @@ ${keywordFilter}
 
         function renderProblemDetailView(containerId, tag, index, primaryColor) {
             const subtags = normalizeProblemSubtags(tag);
-            const subtagsHtml = subtags.map((item, subIndex) => renderProblemSubtag(item, subIndex, tag.tag || '')).join('');
+            const subtagsHtml = subtags.length
+                ? subtags.map((item, subIndex) => renderProblemSubtag(item, subIndex, tag.tag || '')).join('')
+                : '<div class="problem-empty-card">该标签暂无本维度的明确备注，暂不生成问题总结和案例</div>';
 
             return `
                 <article
