@@ -6432,17 +6432,25 @@ ${keywordFilter}
                     total_problems: Number(localDimension.total_problems) || 0,
                     top_tags: (localDimension.top_tags || []).map(localTag => {
                         const aiTag = aiTagMap.get(String(localTag?.tag || '').trim());
+                        const localProblems = localTag.problems || [];
+                        const aiSubTags = aiTag?.sub_tags || aiTag?.subTags || aiTag?.small_tags || [];
+                        // AI 只提供小问题分类。案例内容必须用当前上传文档的
+                        // 本地问题记录回填，即使模型漏返案例 ID 也不能展示空白。
+                        const normalizedSubTags = localProblems.length
+                            ? normalizeProblemSubtags({
+                                ...localTag,
+                                sub_tags: aiSubTags.length ? aiSubTags : (localTag.sub_tags || [])
+                            })
+                            : [];
                         return {
                             ...localTag,
                             summary: aiTag?.summary || localTag.summary || '',
                             count: Number(localTag.count) || 0,
                             percentage: localTag.percentage,
-                            problems: localTag.problems || [],
+                            problems: localProblems,
                             // 只有明确备注会交给模型聚类；无备注标签仍保留本地案例元数据，
                             // 前端统一归入“未填写备注”并展示“无”。
-                            sub_tags: (localTag.problems || []).length
-                                ? (aiTag?.sub_tags?.length ? aiTag.sub_tags : (localTag.sub_tags || []))
-                                : []
+                            sub_tags: normalizedSubTags
                         };
                     })
                 };
