@@ -1104,6 +1104,214 @@
             .ai-summary-table-wrap { margin: 0 14px 16px; }
         }
 
+        /* AI 分析总结｜方案 A：横向数据看板 */
+        .ai-dashboard-dimension {
+            margin-bottom: 22px;
+            border: 1px solid #e2e8f4;
+            border-radius: 18px;
+            overflow: hidden;
+            background: #fff;
+            box-shadow: 0 10px 28px rgba(36, 58, 105, 0.06);
+        }
+
+        .ai-dashboard-grid {
+            display: grid;
+            grid-template-columns: 250px minmax(360px, 0.9fr) minmax(440px, 1.45fr);
+            min-height: 290px;
+        }
+
+        .ai-dashboard-metrics {
+            padding: 20px;
+            background: linear-gradient(145deg, var(--summary-bg), #fff 88%);
+            border-right: 1px solid #e8edf6;
+        }
+
+        .ai-dashboard-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 18px;
+            color: var(--summary-color);
+            font-size: 1rem;
+            font-weight: 850;
+        }
+
+        .ai-dashboard-title-icon {
+            display: grid;
+            place-items: center;
+            width: 34px;
+            height: 34px;
+            border-radius: 10px;
+            color: #fff;
+            background: var(--summary-color);
+            box-shadow: 0 6px 14px color-mix(in srgb, var(--summary-color) 25%, transparent);
+        }
+
+        .ai-dashboard-kpis {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .ai-dashboard-kpi {
+            min-width: 0;
+            padding: 17px 10px;
+            border: 1px solid color-mix(in srgb, var(--summary-color) 14%, #e6ebf4);
+            border-radius: 13px;
+            background: rgba(255,255,255,0.9);
+            text-align: center;
+        }
+
+        .ai-dashboard-kpi-label {
+            display: block;
+            margin-bottom: 9px;
+            color: var(--text-muted);
+            font-size: 0.72rem;
+            font-weight: 700;
+        }
+
+        .ai-dashboard-kpi-value {
+            display: block;
+            color: var(--summary-color);
+            font-size: 1.52rem;
+            line-height: 1.1;
+            font-weight: 900;
+        }
+
+        .ai-dashboard-kpi-note {
+            display: block;
+            margin-top: 6px;
+            color: var(--text-muted);
+            font-size: 0.65rem;
+        }
+
+        .ai-dashboard-ranking,
+        .ai-dashboard-insights {
+            min-width: 0;
+            border-right: 1px solid #e8edf6;
+        }
+
+        .ai-dashboard-insights { border-right: 0; }
+
+        .ai-dashboard-panel-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            min-height: 54px;
+            padding: 0 18px;
+            border-bottom: 1px solid #e8edf6;
+            background: #f8faff;
+            color: var(--text-secondary);
+            font-size: 0.77rem;
+            font-weight: 800;
+        }
+
+        .ai-dashboard-rank-list { padding: 5px 0; }
+
+        .ai-dashboard-rank-row {
+            display: grid;
+            grid-template-columns: 30px minmax(0, 1fr) 58px 64px;
+            gap: 8px;
+            align-items: center;
+            min-height: 45px;
+            padding: 7px 16px;
+            border-bottom: 1px solid #eef1f6;
+        }
+
+        .ai-dashboard-rank-row:last-child { border-bottom: 0; }
+        .ai-dashboard-rank-row:hover { background: #fafcff; }
+
+        .ai-dashboard-rank-index {
+            display: grid;
+            place-items: center;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            color: #fff;
+            background: var(--summary-color);
+            font-size: 0.68rem;
+            font-weight: 800;
+        }
+
+        .ai-dashboard-rank-name {
+            overflow: hidden;
+            color: var(--text-primary);
+            font-size: 0.8rem;
+            font-weight: 750;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .ai-dashboard-rank-name small {
+            margin-left: 6px;
+            color: var(--summary-color);
+            font-size: 0.64rem;
+            font-weight: 800;
+        }
+
+        .ai-dashboard-rank-count,
+        .ai-dashboard-rank-percent {
+            text-align: right;
+            font-size: 0.76rem;
+            font-weight: 800;
+        }
+
+        .ai-dashboard-rank-percent { color: var(--summary-color); }
+        .ai-dashboard-insight-list { padding: 12px; }
+        .ai-dashboard-insight-list { max-height: 315px; overflow-y: auto; }
+
+        .ai-dashboard-detail {
+            margin-bottom: 9px;
+            border: 1px solid #e5eaf3;
+            border-radius: 11px;
+            background: #fff;
+            overflow: hidden;
+        }
+
+        .ai-dashboard-detail:last-child { margin-bottom: 0; }
+
+        .ai-dashboard-detail[open] {
+            border-color: color-mix(in srgb, var(--summary-color) 28%, #dfe5f0);
+            box-shadow: 0 6px 16px rgba(36, 58, 105, 0.05);
+        }
+
+        .ai-dashboard-detail summary {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            min-height: 42px;
+            padding: 8px 13px;
+            color: var(--text-primary);
+            font-size: 0.78rem;
+            font-weight: 800;
+            cursor: pointer;
+            list-style: none;
+        }
+
+        .ai-dashboard-detail summary::-webkit-details-marker { display: none; }
+        .ai-dashboard-detail summary::after { content: '⌄'; color: var(--summary-color); font-size: 1rem; }
+        .ai-dashboard-detail[open] summary::after { transform: rotate(180deg); }
+
+        .ai-dashboard-detail-body {
+            padding: 12px 14px 14px;
+            border-top: 1px solid #edf0f5;
+            color: var(--text-secondary);
+            font-size: 0.79rem;
+            line-height: 1.75;
+        }
+
+        @media (max-width: 1180px) {
+            .ai-dashboard-grid { grid-template-columns: 220px minmax(330px, 1fr); }
+            .ai-dashboard-insights { grid-column: 1 / -1; border-top: 1px solid #e8edf6; }
+        }
+
+        @media (max-width: 760px) {
+            .ai-dashboard-grid { display: block; }
+            .ai-dashboard-metrics,
+            .ai-dashboard-ranking { border-right: 0; border-bottom: 1px solid #e8edf6; }
+        }
+
         .progress-bar {
             height: 8px;
             background: var(--bg-tertiary);
@@ -8652,6 +8860,69 @@ ${keywordFilter}
             `;
         }
 
+        function renderDashboardRankRows(topTags, dimensionTotal) {
+            const items = [];
+            (topTags || []).forEach(tag => {
+                const tagCount = Number(tag.count) || 0;
+                items.push({ name: tag.tag || '未命名标签', type: '子维度', count: tagCount });
+                normalizeProblemSubtags(tag).forEach(subTag => {
+                    items.push({
+                        name: subTag.name || '未分类问题',
+                        type: '小问题',
+                        count: Number(subTag.count) || (subTag.problems || []).length
+                    });
+                });
+            });
+            return items
+                .sort((a, b) => b.count - a.count)
+                .slice(0, 5)
+                .map((item, index) => {
+                    const percentage = dimensionTotal > 0 ? (item.count / dimensionTotal * 100).toFixed(1) : '0.0';
+                    return `
+                        <div class="ai-dashboard-rank-row">
+                            <span class="ai-dashboard-rank-index">${index + 1}</span>
+                            <span class="ai-dashboard-rank-name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}<small>${item.type}</small></span>
+                            <span class="ai-dashboard-rank-count">${item.count}</span>
+                            <span class="ai-dashboard-rank-percent">${percentage}%</span>
+                        </div>
+                    `;
+                }).join('');
+        }
+
+        function renderDashboardInsights(topTags, dimensionSummary) {
+            const details = [`
+                <details class="ai-dashboard-detail" open>
+                    <summary>维度整体总结</summary>
+                    <div class="ai-dashboard-detail-body">${escapeHtml(dimensionSummary)}</div>
+                </details>
+            `];
+            (topTags || []).forEach(tag => {
+                const tagSummary = cleanSummaryText(tag.summary)
+                    || buildLayerSummary(tag.problems || [], `${tag.tag || '该标签'}暂无明确备注。`);
+                details.push(`
+                    <details class="ai-dashboard-detail">
+                        <summary>${escapeHtml(tag.tag || '未命名标签')} · 查看详细描述</summary>
+                        <div class="ai-dashboard-detail-body">${escapeHtml(tagSummary)}</div>
+                    </details>
+                `);
+                normalizeProblemSubtags(tag).slice(0, 3).forEach(subTag => {
+                    const subSummary = cleanSummaryText(subTag.summary) || buildLayerSummary(
+                        subTag.problems || [],
+                        subTag.name === '未填写备注'
+                            ? '该分类存在问题归因标签，但原表未填写对应备注。'
+                            : `${subTag.name || '该问题'}暂无可提取的详细备注。`
+                    );
+                    details.push(`
+                        <details class="ai-dashboard-detail">
+                            <summary>${escapeHtml(subTag.name || '未分类问题')} · 查看详细描述</summary>
+                            <div class="ai-dashboard-detail-body">${escapeHtml(subSummary)}</div>
+                        </details>
+                    `);
+                });
+            });
+            return details.join('');
+        }
+
         function renderAnalysisSummary(result) {
             const container = document.getElementById('analysisSummary');
             if (!container) return;
@@ -8671,55 +8942,38 @@ ${keywordFilter}
                     ? `${dimensionName}共记录${dimensionTotal}次，主要集中在${topTagNames.join('、')}。${buildLayerSummary(dimensionProblems)}`
                     : `${dimensionName}暂无有效标签记录。`;
                 const dimensionSummary = cleanSummaryText(dimension.summary) || dimensionFallback;
-                const rows = [];
-
-                topTags.forEach(tag => {
-                    const tagCount = Number(tag.count) || 0;
-                    const tagPercentage = dimensionTotal > 0 ? (tagCount / dimensionTotal * 100).toFixed(1) : '0.0';
-                    rows.push(renderSummaryTableRow(
-                        '子维度',
-                        tag.tag || '未命名标签',
-                        tagCount,
-                        tagPercentage,
-                        cleanSummaryText(tag.summary) || buildLayerSummary(tag.problems || [], `${tag.tag || '该标签'}暂无明确备注。`)
-                    ));
-
-                    normalizeProblemSubtags(tag).forEach(subTag => {
-                        const subCount = Number(subTag.count) || (subTag.problems || []).length;
-                        const subPercentage = tagCount > 0 ? (subCount / tagCount * 100).toFixed(1) : '0.0';
-                        rows.push(renderSummaryTableRow(
-                            '小问题',
-                            subTag.name || '未分类问题',
-                            subCount,
-                            subPercentage,
-                            cleanSummaryText(subTag.summary) || buildLayerSummary(
-                                subTag.problems || [],
-                                subTag.name === '未填写备注'
-                                    ? '该分类存在问题归因标签，但原表未填写对应备注。'
-                                    : `${subTag.name || '该问题'}暂无可提取的详细备注。`
-                            )
-                        ));
-                    });
-                });
+                const rankRows = renderDashboardRankRows(topTags, dimensionTotal);
+                const insightRows = renderDashboardInsights(topTags, dimensionSummary);
 
                 return `
-                    <section class="ai-summary-dimension" style="--summary-color:${config.color}; --summary-bg:${config.bgColor};">
-                        <div class="ai-summary-dimension-title">
-                            <span class="ai-summary-heading">
-                                <span class="ai-summary-heading-icon">${config.icon || '📁'}</span>
-                                <span>${escapeHtml(dimensionName)}多维度总结</span>
-                            </span>
-                            <span class="ai-summary-heading-meta">${dimensionTotal} 次 · ${dimensionPercentage}%</span>
-                        </div>
-                        <div class="ai-summary-overview">
-                            <span class="ai-summary-overview-label">维度概览</span>
-                            <span class="ai-summary-overview-text">${escapeHtml(dimensionSummary)}</span>
-                        </div>
-                        <div class="ai-summary-table-wrap">
-                            <table class="ai-summary-table">
-                                <thead><tr><th>问题分类</th><th>数量</th><th>维度内占比</th><th>备注总结</th></tr></thead>
-                                <tbody>${rows.join('')}</tbody>
-                            </table>
+                    <section class="ai-dashboard-dimension" style="--summary-color:${config.color}; --summary-bg:${config.bgColor};">
+                        <div class="ai-dashboard-grid">
+                            <div class="ai-dashboard-metrics">
+                                <div class="ai-dashboard-title">
+                                    <span class="ai-dashboard-title-icon">${config.icon || '📁'}</span>
+                                    <span>${escapeHtml(dimensionName)}</span>
+                                </div>
+                                <div class="ai-dashboard-kpis">
+                                    <div class="ai-dashboard-kpi">
+                                        <span class="ai-dashboard-kpi-label">标签数</span>
+                                        <strong class="ai-dashboard-kpi-value">${dimensionTotal}</strong>
+                                        <span class="ai-dashboard-kpi-note">问题标签累计</span>
+                                    </div>
+                                    <div class="ai-dashboard-kpi">
+                                        <span class="ai-dashboard-kpi-label">占比</span>
+                                        <strong class="ai-dashboard-kpi-value">${dimensionPercentage}%</strong>
+                                        <span class="ai-dashboard-kpi-note">占全部标签</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="ai-dashboard-ranking">
+                                <div class="ai-dashboard-panel-title"><span>高频问题 TOP 5</span><span>数量 · 占比</span></div>
+                                <div class="ai-dashboard-rank-list">${rankRows || '<div class="problem-empty-card">暂无有效问题分类</div>'}</div>
+                            </div>
+                            <div class="ai-dashboard-insights">
+                                <div class="ai-dashboard-panel-title"><span>AI 总结与备注说明</span><span>点击展开详情</span></div>
+                                <div class="ai-dashboard-insight-list">${insightRows}</div>
+                            </div>
                         </div>
                     </section>
                 `;
