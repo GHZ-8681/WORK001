@@ -7246,8 +7246,17 @@ ${keywordFilter}
                 .replace(/[\s\p{P}\p{S}]+/gu, '');
         }
 
+        function isInvalidAnalysisTagName(value) {
+            const name = String(value || '').trim();
+            return !name || /^(?:解析失败|分析失败|未知错误|未知问题|空白|无数据)$/i.test(name);
+        }
+
         function extractRemarkSectionForTag(remark, tag) {
-            const source = String(remark || '').replace(/\r\n?/g, '\n').trim();
+            const source = String(remark || '')
+                .replace(/\r\n?/g, '\n')
+                .trim()
+                .replace(/^["'“”‘’]+|["'“”‘’]+$/g, '')
+                .trim();
             if (!source) return '';
             const target = normalizeRemarkSectionTitle(tag);
             const titlePattern = target === '内容可理解性'
@@ -7257,17 +7266,21 @@ ${keywordFilter}
                     : target === '叙事节奏质量'
                         ? '叙事节奏质量(?:问题)?'
                         : String(tag || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            // 支持“美学：……”“动作：……”等分镜维度下一级标题，
-            // 标题可以位于行首，也可以由分号分隔。
-            const headerPattern = new RegExp(`(?:^|[\\n；;])\\s*(?:\\d+\\s*[.、)）]\\s*)?${titlePattern}\\s*(?:问题)?\\s*[：:]?`, 'i');
+            // 兼容“1，原视频还原度问题（70%）”“2、内容可理解性”等真实备注格式。
+            // 百分比属于标题的一部分，案例中需要完整保留。
+            const rowPrefix = '(?:^|[\\n；;])\\s*["\'“”‘’]*\\s*(?:\\d+\\s*[.、,，)）]\\s*)?';
+            const scoreSuffix = '(?:\\s*[（(]\\s*\\d+(?:\\.\\d+)?%\\s*[）)])?';
+            const headerPattern = new RegExp(`${rowPrefix}${titlePattern}${scoreSuffix}\\s*[：:]?`, 'i');
             const match = headerPattern.exec(source);
             if (!match) return '';
             const start = match.index + (/^[\n；;]/.test(match[0]) ? 1 : 0);
-            const remaining = source.slice(start);
-            const nextHeader = /(?:\n|[；;])\s*(?:\d+\s*[.、)）]\s*)?[^：:\n；;]{1,20}\s*[：:]/.exec(remaining.slice(1));
-            const end = nextHeader ? start + 1 + nextHeader.index : source.length;
+            const remaining = source.slice(start + match[0].length);
+            const knownTitles = '(?:原视频还原度(?:问题)?|内容(?:可)?理解性(?:问题)?|叙事节奏质量(?:问题)?)';
+            const nextHeaderPattern = new RegExp(`${rowPrefix}${knownTitles}${scoreSuffix}\\s*[：:]?`, 'i');
+            const nextHeader = nextHeaderPattern.exec(remaining);
+            const end = nextHeader ? start + match[0].length + nextHeader.index : source.length;
             return source.slice(start, end)
-                .replace(/^\s*\d+\s*[.、)）]\s*/, '')
+                .replace(/^\s*\d+\s*[.、,，)）]\s*/, '')
                 .trim();
         }
 
@@ -8957,14 +8970,18 @@ ${keywordFilter}
                     ];
                     item.problems = selectDiverseProblemCases(preferred, item, 5);
                 });
-                if (missingRemarkProblems.length) {
-                    normalized.push({
-                        name: '未填写备注',
-                        count: missingRemarkProblems.length,
-                        problems: selectMissingRemarkCases(missingRemarkProblems, 5)
-                    });
+                // 如果模型只返回“解析失败/未填写备注”等无效分类，但原表存在有效备注，
+                // 继续走下方本地聚类，不能让错误分类覆盖真实案例。
+                if (normalized.length || candidatePool.length === 0) {
+                    if (missingRemarkProblems.length) {
+                        normalized.push({
+                            name: '未填写备注',
+                            count: missingRemarkProblems.length,
+                            problems: selectMissingRemarkCases(missingRemarkProblems, 5)
+                        });
+                    }
+                    return normalized;
                 }
-                return normalized;
             }
 
             const uniqueProblems = [];
@@ -9045,6 +9062,7 @@ ${keywordFilter}
         }
 
         function renderProblemCards(container, topTags, primaryColor, dimTotal, dimName = '问题明细', dimData = null) {
+            topTags = (topTags || []).filter(tag => !isInvalidAnalysisTagName(tag?.tag || tag?.name));
             const containerId = container.id || `problem_${Date.now()}`;
             container.className = 'problem-interactive-layout';
             if (!topTags || topTags.length === 0) {
