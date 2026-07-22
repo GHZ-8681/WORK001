@@ -7279,9 +7279,16 @@ ${keywordFilter}
             const nextHeaderPattern = new RegExp(`${rowPrefix}${knownTitles}${scoreSuffix}\\s*[：:]?`, 'i');
             const nextHeader = nextHeaderPattern.exec(remaining);
             const end = nextHeader ? start + match[0].length + nextHeader.index : source.length;
-            return source.slice(start, end)
+            const section = source.slice(start, end)
                 .replace(/^\s*\d+\s*[.、,，)）]\s*/, '')
                 .trim();
+            // 仅填写“原视频还原度”等分类标题不属于问题描述。
+            // 必须在标题（及可选百分比）之后存在实际备注内容才返回该段。
+            const body = section
+                .replace(new RegExp(`^\\s*${titlePattern}${scoreSuffix}\\s*[：:]?`, 'i'), '')
+                .replace(/^\s*(?:[a-zA-Z]|\d+)\s*[)）.、,，]?\s*$/, '')
+                .trim();
+            return body ? section : '';
         }
 
         function getRemarkForAttributionEntry(parts, headers, remarkIndexes, entry) {
