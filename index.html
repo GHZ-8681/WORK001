@@ -8795,7 +8795,8 @@ ${keywordFilter}
         function inferProblemSubtag(problem, fallbackIndex = 0) {
             const text = `${normalizeProblemText(problem)} ${typeof problem === 'object' ? (problem.remark || '') : ''}`;
             const rules = [
-                ['人物一致性', /人物|角色|面部|五官|服装|发型|年龄|性别/],
+                ['人物一致性', /人物|角色|面部|五官|服装|衣服|围裙|发型|年龄|性别/],
+                ['情绪表达异常', /情绪|表情|神态|哭|笑|紧张|夸张|冷漠|激动/],
                 ['动作表达异常', /动作|姿态|手势|运动|行为|交互|打斗/],
                 ['场景元素问题', /场景|背景|道具|物体|元素|环境|空间/],
                 ['镜头衔接问题', /衔接|连贯|转场|前后|跳变|镜头/],
@@ -8967,13 +8968,100 @@ ${keywordFilter}
                 }
                 return selected;
             };
+
+            const getCategoryDefinitions = tagName => {
+                const name = String(tagName || '');
+                if (/内容可理解/.test(name)) {
+                    return [
+                        ['逻辑因果问题', /逻辑|因果|不合理|矛盾|莫名|为什么|突兀/],
+                        ['人物关系问题', /关系|父亲|母亲|姐姐|哥哥|夫妻|情侣|亲密|认识|陌生/],
+                        ['行为动机问题', /动机|行为|反应|做法|动作|应该|不应该|不符合/],
+                        ['信息缺失问题', /缺少|缺失|遗漏|没交代|未说明|看不懂|无法理解/],
+                        ['时空衔接问题', /前后|衔接|连续|时间|空间|位置|场景|突然|跳变/],
+                        ['其他理解问题', /[\s\S]*/]
+                    ];
+                }
+                if (/叙事节奏/.test(name)) {
+                    return [
+                        ['节奏拖沓问题', /拖沓|太慢|节奏慢|冗长|停留太久|重复/],
+                        ['节奏过快问题', /太快|节奏快|仓促|来不及|一闪而过/],
+                        ['情节冗余问题', /多余|冗余|重复|不需要|无意义/],
+                        ['情节缺失问题', /缺少|缺失|遗漏|跳过|没交代/],
+                        ['转场衔接问题', /转场|衔接|过渡|跳变|突然|镜头切换/],
+                        ['其他节奏问题', /[\s\S]*/]
+                    ];
+                }
+                return [
+                    ['动作行为偏差', /动作|行为|姿态|手势|走|跑|坐|站|拿|放|推|拉|牵|跪|转身|朝向/],
+                    ['情绪表情偏差', /情绪|表情|神态|哭|笑|紧张|夸张|冷漠|激动|害怕|愤怒/],
+                    ['人物服装错误', /人物|角色|脸|面部|五官|眼睛|头发|发型|年龄|性别|服装|衣服|围裙|鞋|穿着|替换|重复/],
+                    ['场景空间错误', /场景|背景|环境|空间|地点|房间|室内|室外|位置|方向|距离|早上|晚上|白天|夜晚/],
+                    ['台词声音错误', /台词|对白|语言|说话|声音|口型|字幕|旁白|画外音/],
+                    ['其他还原偏差', /[\s\S]*/]
+                ];
+            };
+
+            const selectGroupedCases = (problems, limit = 5) => {
+                const byScript = new Map();
+                problems.forEach(problem => {
+                    const script = normalizeProblemScript(problem);
+                    if (!byScript.has(script)) byScript.set(script, []);
+                    byScript.get(script).push(problem);
+                });
+                const groups = [...byScript.values()];
+                const selected = [];
+                let round = 0;
+                while (selected.length < limit && groups.some(group => group[round])) {
+                    groups.forEach(group => {
+                        if (selected.length < limit && group[round]) selected.push(group[round]);
+                    });
+                    round++;
+                }
+                return selected;
+            };
+
+            // 小标签必须是通用问题分类：先将所有原始备注归入 6 类，
+            // 再按真实问题片段数量选择占比最高的 3 类，完全不采用模型生成的具体事件标题或次数。
+            const explicitProblems = (tag.problems || []).filter(hasExplicitProblemRemark);
+            if (explicitProblems.length) {
+                const definitions = getCategoryDefinitions(tag.tag || tag.name || '');
+                const categoryGroups = new Map(definitions.map(([name]) => [name, []]));
+                const seenFragments = new Set();
+                explicitProblems.forEach(problem => {
+                    const remark = normalizeProblemRemark(problem) || normalizeProblemText(problem);
+                    const fragments = splitRemarkIntoIssueFragments(remark)
+                        .filter(fragment => !isRemarkDimensionHeadingOnly(fragment));
+                    fragments.forEach(fragment => {
+                        const category = definitions.find(([, pattern]) => pattern.test(fragment))?.[0]
+                            || definitions[definitions.length - 1][0];
+                        const detailedRemark = formatRemarkFragment(problem, fragment);
+                        const key = `${category}|${normalizeProblemScript(problem)}|${normalizeProblemShot(problem)}|${detailedRemark}`;
+                        if (!detailedRemark || seenFragments.has(key)) return;
+                        seenFragments.add(key);
+                        categoryGroups.get(category).push({
+                            ...problem,
+                            description: detailedRemark,
+                            remark: detailedRemark
+                        });
+                    });
+                });
+                const classified = [...categoryGroups.entries()]
+                    .filter(([, problems]) => problems.length > 0)
+                    .map(([name, problems]) => ({
+                        name,
+                        count: problems.length,
+                        problems: selectGroupedCases(problems, 5)
+                    }))
+                    .sort((a, b) => b.count - a.count)
+                    .slice(0, 3);
+                if (classified.length) return classified;
+            }
             if (source.length) {
                 const candidatePool = [];
                 const candidateKeys = new Set();
-                [
-                    ...source.flatMap(item => item.problems || item.cases || []),
-                    ...(tag.problems || [])
-                ].forEach(problem => {
+                // 分类校验只能使用从原表重建的 tag.problems；模型返回的案例文本
+                // 可能改写、错配或重复，不能作为统计与展示的数据源。
+                (tag.problems || []).forEach(problem => {
                     if (!hasExplicitProblemRemark(problem)) return;
                     const key = `${normalizeProblemText(problem)}|${normalizeProblemScript(problem)}|${normalizeProblemShot(problem)}`;
                     if (!key || candidateKeys.has(key)) return;
@@ -8981,30 +9069,66 @@ ${keywordFilter}
                     candidatePool.push(problem);
                 });
 
-                const normalized = [...source]
+                let normalized = [...source]
                     .filter(item => {
                         const name = item?.name || item?.tag || item?.label || '';
                         return !isInvalidSubtagName(name) && !isMissingRemarkSubtagName(name);
                     })
-                    .sort((a, b) => (Number(b.count) || b.problems?.length || b.cases?.length || 0) - (Number(a.count) || a.problems?.length || a.cases?.length || 0))
-                    .slice(0, 3).map((item, index) => ({
+                    .map((item, index) => ({
                     name: item.name || item.tag || item.label || `问题类型${index + 1}`,
-                    count: Number(item.count) || (item.problems || item.cases || []).length,
+                    count: 0,
                     summary: item.summary || '',
-                    problems: [...(item.problems || item.cases || [])]
+                    problems: []
                 }));
 
                 normalized.forEach(item => {
-                    // 模型已经明确分配到当前小问题的案例允许使用原文首个片段兜底，
-                    // 其余候选池仍必须通过语义关键词匹配，防止混入无关备注。
-                    const preferred = [
-                        ...item.problems.map(problem => typeof problem === 'object'
-                            ? ({ ...problem, __allowSubtagFallback: true })
-                            : ({ description: String(problem || ''), remark: String(problem || ''), __allowSubtagFallback: true })),
-                        ...candidatePool
-                    ];
-                    item.problems = selectDiverseProblemCases(preferred, item, 5);
+                    // 模型只负责建议分类名称；数量和案例必须回到原始备注逐条语义匹配，
+                    // 禁止使用模型声称的次数，也禁止用无关案例凑满 5 条。
+                    const matched = selectDiverseProblemCases(candidatePool, item, 500);
+                    item.count = matched.length;
+                    item.problems = matched.slice(0, 5);
+                    item.__matchedProblems = matched;
                 });
+                normalized = normalized.filter(item => item.count > 0);
+
+                // 当模型分类无效或不足 3 类时，用本地规则从真实备注补足候选分类。
+                const localGroups = new Map();
+                candidatePool.forEach((problem, index) => {
+                    const name = inferProblemSubtag(problem, index);
+                    if (!localGroups.has(name)) localGroups.set(name, []);
+                    localGroups.get(name).push(problem);
+                });
+                localGroups.forEach((problems, name) => {
+                    const family = inferProblemSubtag({ remark: name });
+                    if (normalized.some(item => item.name === name || inferProblemSubtag({ remark: item.name }) === family)) return;
+                    const matched = selectDiverseProblemCases(problems, { name }, 500);
+                    normalized.push({
+                        name,
+                        count: matched.length,
+                        summary: '',
+                        problems: matched.slice(0, 5),
+                        __matchedProblems: matched
+                    });
+                });
+                normalized = normalized
+                    .filter(item => item.problems.length > 0)
+                    .sort((a, b) => b.count - a.count)
+                    .slice(0, 3);
+                // 三个分类的展示案例必须互斥；同一剧本同一分镜的同一备注只展示一次。
+                const usedCaseKeys = new Set();
+                normalized.forEach(item => {
+                    const selected = [];
+                    for (const problem of (item.__matchedProblems || item.problems)) {
+                        if (selected.length >= 5) break;
+                        const key = `${normalizeProblemScript(problem)}|${normalizeProblemShot(problem)}|${normalizeProblemRemark(problem)}`;
+                        if (usedCaseKeys.has(key)) continue;
+                        usedCaseKeys.add(key);
+                        selected.push(problem);
+                    }
+                    item.problems = selected;
+                    delete item.__matchedProblems;
+                });
+                normalized = normalized.filter(item => item.problems.length > 0);
                 // 如果模型只返回“解析失败/未填写备注”等无效分类，但原表存在有效备注，
                 // 继续走下方本地聚类，不能让错误分类覆盖真实案例。
                 if (normalized.length || candidatePool.length === 0) {
