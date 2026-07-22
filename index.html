@@ -8821,6 +8821,32 @@ ${keywordFilter}
             return fragments.length ? fragments : [source];
         }
 
+        function isRemarkDimensionHeadingOnly(fragment) {
+            const normalized = normalizeRemarkSectionTitle(
+                String(fragment || '').replace(/[（(]\s*\d+(?:\.\d+)?%\s*[）)]/g, '')
+            );
+            return ['原视频还原度', '内容可理解性', '叙事节奏质量'].includes(normalized);
+        }
+
+        function getRemarkDimensionHeading(remark) {
+            const firstLine = String(remark || '').replace(/\r\n?/g, '\n').split('\n')[0]
+                .replace(/^["'“”‘’\s]+/, '')
+                .replace(/^\d+\s*[.、,，)）]\s*/, '')
+                .trim();
+            return /^(?:原视频还原度(?:问题)?|内容(?:可)?理解性(?:问题)?|叙事节奏质量(?:问题)?)(?:\s*[（(]\s*\d+(?:\.\d+)?%\s*[）)])?\s*[：:]?$/i.test(firstLine)
+                ? firstLine
+                : '';
+        }
+
+        function formatRemarkFragment(problem, fragment) {
+            const value = String(fragment || '').trim();
+            if (!value) return '';
+            const heading = getRemarkDimensionHeading(normalizeProblemRemark(problem) || normalizeProblemText(problem));
+            return heading && !isRemarkDimensionHeadingOnly(value) && !value.startsWith(heading)
+                ? `${heading}\n${value}`
+                : value;
+        }
+
         function getSubtagMatchKeywords(subtag) {
             const source = `${subtag?.name || ''} ${subtag?.summary || ''}`;
             const ruleGroups = [
@@ -8844,7 +8870,8 @@ ${keywordFilter}
 
         function extractRemarkForSubtag(problem, subtag) {
             const remark = normalizeProblemRemark(problem) || normalizeProblemText(problem);
-            const fragments = splitRemarkIntoIssueFragments(remark);
+            const fragments = splitRemarkIntoIssueFragments(remark)
+                .filter(fragment => !isRemarkDimensionHeadingOnly(fragment));
             if (!fragments.length) return '';
             const keywords = getSubtagMatchKeywords(subtag);
             const scored = fragments.map((fragment, index) => ({
@@ -8852,7 +8879,7 @@ ${keywordFilter}
                 index,
                 score: keywords.reduce((score, keyword) => score + (fragment.includes(keyword) ? Math.max(1, keyword.length) : 0), 0)
             })).sort((a, b) => b.score - a.score || a.index - b.index);
-            return scored[0]?.score > 0 ? scored[0].fragment : '';
+            return scored[0]?.score > 0 ? formatRemarkFragment(problem, scored[0].fragment) : '';
         }
 
         function seededHash(text) {
@@ -8870,8 +8897,9 @@ ${keywordFilter}
             candidates.forEach(problem => {
                 if (!hasExplicitProblemRemark(problem)) return;
                 const fragments = splitRemarkIntoIssueFragments(normalizeProblemRemark(problem) || normalizeProblemText(problem));
+                const firstDetailedFragment = fragments.find(fragment => !isRemarkDimensionHeadingOnly(fragment)) || '';
                 const matchedRemark = extractRemarkForSubtag(problem, subtag)
-                    || (problem?.__allowSubtagFallback ? (fragments[0] || '') : '');
+                    || (problem?.__allowSubtagFallback ? formatRemarkFragment(problem, firstDetailedFragment) : '');
                 if (!matchedRemark) return;
                 const key = `${normalizeProblemScript(problem)}|${normalizeProblemShot(problem)}|${matchedRemark}`;
                 if (seen.has(key)) return;
