@@ -5887,8 +5887,67 @@
 
         function getStructuredTableContext(csvData) {
             const sheetName = getSheetNameFromCsv(csvData);
-            const rawRecords = splitCSVRecords(csvData)
-                .filter(record => !/^---\s*Sheet:.*---$/i.test(record.trim()));
+            const sourceRecords = splitCSVRecords(csvData);
+            const hasSheetMarkers = sourceRecords.some(record => /^---\s*Sheet:.*---$/i.test(record.trim()));
+
+            if (hasSheetMarkers) {
+                const blocks = [];
+                let current = { name: '', rows: [] };
+                sourceRecords.forEach(record => {
+                    const match = record.trim().match(/^---\s*Sheet:\s*(.*?)\s*---$/i);
+                    if (match) {
+                        if (current.rows.length) blocks.push(current);
+                        current = { name: match[1].trim(), rows: [] };
+                    } else {
+                        current.rows.push(record);
+                    }
+                });
+                if (current.rows.length) blocks.push(current);
+
+                const scoredBlocks = blocks.map(block => {
+                    let bestIndex = -1;
+                    let bestScore = -1;
+                    block.rows.slice(0, 120).forEach((record, index) => {
+                        const candidateHeaders = parseCSVLine(record).map(value => String(value || '').trim());
+                        const attributionCount = findProblemAttributionColumnIndexes(candidateHeaders).length;
+                        const score = attributionCount * 20 + Math.min(candidateHeaders.length, 20) * 0.1;
+                        if (attributionCount > 0 && score > bestScore) {
+                            bestIndex = index;
+                            bestScore = score;
+                        }
+                    });
+                    return { ...block, bestIndex };
+                }).filter(block => block.bestIndex >= 0);
+
+                if (scoredBlocks.length) {
+                    const baseHeaders = parseCSVLine(scoredBlocks[0].rows[scoredBlocks[0].bestIndex]).map(value => String(value || '').trim());
+                    const existingScriptIndex = findMetadataColumnIndex(baseHeaders, 'script');
+                    const mergedHeaders = existingScriptIndex >= 0 ? baseHeaders : [...baseHeaders, '剧本名'];
+                    const encodeRow = values => values.map(value => {
+                        const text = String(value ?? '');
+                        return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+                    }).join(',');
+                    const mergedRecords = [encodeRow(mergedHeaders)];
+
+                    scoredBlocks.forEach(block => {
+                        block.rows.slice(block.bestIndex + 1).forEach(record => {
+                            const values = parseCSVLine(record);
+                            if (!values.some(value => String(value || '').trim())) return;
+                            const normalizedRow = values.slice(0, baseHeaders.length);
+                            while (normalizedRow.length < baseHeaders.length) normalizedRow.push('');
+                            if (existingScriptIndex >= 0) {
+                                if (!String(normalizedRow[existingScriptIndex] || '').trim()) normalizedRow[existingScriptIndex] = block.name;
+                            } else {
+                                normalizedRow.push(block.name);
+                            }
+                            mergedRecords.push(encodeRow(normalizedRow));
+                        });
+                    });
+                    return { sheetName: '', records: mergedRecords, headers: mergedHeaders };
+                }
+            }
+
+            const rawRecords = sourceRecords.filter(record => !/^---\s*Sheet:.*---$/i.test(record.trim()));
             if (!rawRecords.length) return { sheetName, records: [], headers: [] };
 
             let bestIndex = 0;
@@ -5942,7 +6001,7 @@
                         tags: [entry.tag],
                         description: remark.slice(0, 1200),
                         remark: remark.slice(0, 2400),
-                        script: sheetName || String(scriptIndex >= 0 ? parts[scriptIndex] || '' : '').trim() || '未识别剧本',
+                        script: String(scriptIndex >= 0 ? parts[scriptIndex] || '' : '').trim() || sheetName || '未识别剧本',
                         shot: String(shotIndex >= 0 ? parts[shotIndex] || '' : '').trim() || '未识别分镜'
                     });
                 });
@@ -5987,8 +6046,8 @@
 
 每个“dimension + tag”组合：
 1. 先根据备注归纳5至10个语义互不相同的通用问题，再按实际出现次数只返回占比最高的3个；小问题名称不超过10个字；
-2. 每个小标签选择最多5个最典型且互不重复的案例；
-3. 同一个案例ID在同一大标签下只能属于一个小标签；
+2. 每个小标签选择最多5个最典型案例，并优先覆盖多个不同剧本；
+3. 同一个案例ID的备注确实包含多个不同问题时，可以分别属于不同小标签；每个小标签只对应备注中与其语义相关的片段；
 4. 不要改写备注，不要返回备注全文，只返回案例ID；
 5. 数据不足5条时按实际数量返回，禁止虚构。
 6. 若备注包含“美学：……”“动作：……”等下一级标题，优先沿用该标题语义进行归类，且案例必须保留对应标题下的原始备注。
@@ -6098,8 +6157,9 @@ ${keywordFilter}
    - 全局维度始终输出“原视频还原度”“内容可理解性”“叙事节奏质量”3个固定大标签；分镜之间和单分镜根据文档内容识别并保留占比最高的前3个大标签
    - 每个维度标签必须根据实际问题语义聚类，统计各问题类型的出现次数，只保留出现次数最多的前3个小标签并按次数降序排列；名称控制在4至8个字
    - 每个小标签必须展示5个不同的代表案例，即每个维度标签共展示15个案例
-   - 案例优先选择最典型、最能代表该小标签的记录，同一案例不得在同一个维度标签的多个小标签中重复
-   - 每个案例只需包含当前问题描述、剧本名称、分镜信息和备注原文；备注必须保持原文，不得概括或改写
+   - 案例需要从多个不同剧本中分散抽取；同等匹配度下优先扩大剧本覆盖面，不要连续只取同一个剧本
+   - 同一单元格同时包含多个问题时，可以分别成为不同小标签的案例，但每个案例的备注只保留与当前小标签有关的原文片段；不属于当前分类的其他备注不得展示
+   - 每个案例只需包含当前问题描述、剧本名称、分镜信息和当前分类对应的备注原文；备注不得概括或改写
    - 不需要识别、提取、生成或输出任何分镜提示词
    - 百分比计算基于该维度内部的标签总数
    - 按出现数量从高到低排序
@@ -6173,7 +6233,7 @@ ${keywordFilter}
 1. 统计务必准确，不要遗漏任何标签，即使是出现次数很少的标签也要统计
 2. tag_statistics按count从高到低排序，至少包含所有出现过的标签
 3. top_tags按count从高到低排序，取前10个，每个标签包含最多5个相关问题对象，每个对象必须包含description、script、shot、remark；remark只取当前问题所在行的备注
-4. dimension_statistics中“全局维度”的top_tags必须且只能完整输出“原视频还原度”“内容可理解性”“叙事节奏质量”3个大标签；每个大标签固定输出3个小标签，每个小标签的problems单独输出5条不同案例，必须按5+5+5输出、每个大标签合计15条，不能把总共5条拆给3个小标签。原始数据充足时，全局维度3个大标签总计必须输出45条案例；同一案例不得在同一大标签下重复。仅当原始数据中该小标签确实不足5条时才可少于5条，严禁编造
+4. dimension_statistics中“全局维度”的top_tags必须且只能完整输出“原视频还原度”“内容可理解性”“叙事节奏质量”3个大标签；每个大标签固定输出3个小标签，每个小标签的problems单独输出5条不同案例，必须按5+5+5输出、每个大标签合计15条，不能把总共5条拆给3个小标签。案例优先覆盖多个剧本；同一原始单元格包含多个不同问题时允许进入不同小标签，但每处只返回该小标签对应的备注片段。仅当原始数据中该小标签确实不足5条时才可少于5条，严禁编造
 5. analysis_summary内容要详实深入，不少于800字，要有数据支撑和具体案例
 6. 所有数字必须准确，基于实际文档内容计算
 7. description字段要具体，不能写"暂无说明"之类的空话
@@ -6498,7 +6558,7 @@ ${keywordFilter}
                     return {
                         key: normalizeMetadataMatchText(remark),
                         description: remark,
-                        script: sheetName || String(scriptIndex >= 0 ? parts[scriptIndex] || '' : '').trim() || '未识别剧本',
+                        script: String(scriptIndex >= 0 ? parts[scriptIndex] || '' : '').trim() || sheetName || '未识别剧本',
                         shot: String(shotIndex >= 0 ? parts[shotIndex] || '' : '').trim() || '未识别分镜',
                         remark
                     };
@@ -6853,7 +6913,7 @@ ${keywordFilter}
                 
                 const parts = parseCSVLine(line);
                 const attributionEntries = getProblemAttributionEntries(parts, tagIndexes, headers);
-                const script = sheetName || (scriptIndex !== -1 ? (parts[scriptIndex] || '').trim() : '');
+                const script = (scriptIndex !== -1 ? (parts[scriptIndex] || '').trim() : '') || sheetName;
                 const shot = shotIndex !== -1 ? (parts[shotIndex] || '').trim() : '';
                 const scriptPrompt = scriptPromptIndex !== -1 ? (parts[scriptPromptIndex] || '').trim() : '';
                 const shotPrompt = shotPromptIndex !== -1 ? (parts[shotPromptIndex] || '').trim() : '';
@@ -6883,7 +6943,7 @@ ${keywordFilter}
                     percentage: totalTags > 0 ? ((count / totalTags) * 100).toFixed(1) : '0',
                     description: getTagDescription(tag),
                     // 保留足够的候选案例，供 3 个小问题分别分配 5 条。
-                    problems: (tagProblemsMap[tag] || []).slice(0, 15)
+                    problems: (tagProblemsMap[tag] || []).slice(0, 500)
                 }))
                 .sort((a, b) => b.count - a.count);
 
@@ -6913,7 +6973,7 @@ ${keywordFilter}
                 const parts = parseCSVLine(line);
                 const attributionEntries = getProblemAttributionEntries(parts, tagIndexes, headers);
                 const rowTags = attributionEntries.map(entry => entry.tag);
-                const script = sheetName || (scriptIndex !== -1 ? (parts[scriptIndex] || '').trim() : '');
+                const script = (scriptIndex !== -1 ? (parts[scriptIndex] || '').trim() : '') || sheetName;
                 const shot = shotIndex !== -1 ? (parts[shotIndex] || '').trim() : '';
                 const scriptPrompt = scriptPromptIndex !== -1 ? (parts[scriptPromptIndex] || '').trim() : '';
                 const shotPrompt = shotPromptIndex !== -1 ? (parts[shotPromptIndex] || '').trim() : '';
@@ -6964,7 +7024,7 @@ ${keywordFilter}
                     count,
                     percentage: dimensionTotal > 0 ? ((count / dimensionTotal) * 100).toFixed(1) : '0',
                     // 为“3个小标签 × 每类5个案例”保留至少15条候选问题
-                    problems: (dimensionTagProblems[dimension][tag] || []).slice(0, 15)
+                    problems: (dimensionTagProblems[dimension][tag] || []).slice(0, 500)
                 })).sort((a, b) => b.count - a.count);
                 
                 dimensionStats[dimension].total_count = dimensionTotal;
@@ -8698,6 +8758,95 @@ ${keywordFilter}
             return Boolean(remark && remark !== '无');
         }
 
+        function splitRemarkIntoIssueFragments(remark) {
+            const source = String(remark || '').replace(/\r\n?/g, '\n').trim();
+            if (!source || source === '无') return [];
+            const fragments = source
+                .split(/(?:\n+|[；;]+|(?=\s*[a-zA-Z]\s*[)）.、])|(?=\s*\d+\s*[)）.、]))/g)
+                .map(item => item.replace(/^\s*(?:[a-zA-Z]|\d+)\s*[)）.、]\s*/, '').trim())
+                .filter(Boolean);
+            return fragments.length ? fragments : [source];
+        }
+
+        function getSubtagMatchKeywords(subtag) {
+            const source = `${subtag?.name || ''} ${subtag?.summary || ''}`;
+            const ruleGroups = [
+                [/动作|姿态|行为|交互|推|拉|坐|站|走|跑|手势/, ['动作','姿态','行为','交互','推','拉','坐','站','走','跑','手','身体']],
+                [/情绪|表情|神态|哭|笑|紧张|夸张/, ['情绪','表情','神态','哭','笑','紧张','夸张','冷漠','激动']],
+                [/场景|背景|环境|空间|地点|走廊|医院|室内|室外/, ['场景','背景','环境','空间','地点','走廊','医院','室内','室外','门口']],
+                [/人物|角色|面部|五官|年龄|性别/, ['人物','角色','面部','五官','年龄','性别','脸']],
+                [/服装|衣服|穿着|道具|物体/, ['服装','衣服','穿','裙','道具','物体']],
+                [/台词|对白|语言|声音|口型/, ['台词','对白','语言','声音','口型','说话']],
+                [/镜头|衔接|连贯|转场|跳变/, ['镜头','衔接','连贯','转场','跳变','前后']],
+                [/构图|位置|比例|方向|距离|景别/, ['构图','位置','比例','方向','距离','景别','朝向']],
+                [/光影|光线|色彩|颜色|曝光/, ['光影','光线','色彩','颜色','曝光','明暗']],
+                [/提示词|指令|解析|响应/, ['提示词','指令','解析','响应','生成']]
+            ];
+            const matched = ruleGroups.find(([pattern]) => pattern.test(source));
+            const direct = source.replace(/[问题异常错误偏差不符一致性还原度质量]/g, ' ')
+                .split(/[\s、，,；;：:（）()]+/).filter(word => word.length >= 2);
+            return Array.from(new Set([...(matched ? matched[1] : []), ...direct]));
+        }
+
+        function extractRemarkForSubtag(problem, subtag) {
+            const remark = normalizeProblemRemark(problem) || normalizeProblemText(problem);
+            const fragments = splitRemarkIntoIssueFragments(remark);
+            if (!fragments.length) return '';
+            const keywords = getSubtagMatchKeywords(subtag);
+            const scored = fragments.map((fragment, index) => ({
+                fragment,
+                index,
+                score: keywords.reduce((score, keyword) => score + (fragment.includes(keyword) ? Math.max(1, keyword.length) : 0), 0)
+            })).sort((a, b) => b.score - a.score || a.index - b.index);
+            return scored[0]?.score > 0 ? scored[0].fragment : '';
+        }
+
+        function seededHash(text) {
+            let hash = 2166136261;
+            for (const char of String(text || '')) {
+                hash ^= char.charCodeAt(0);
+                hash = Math.imul(hash, 16777619);
+            }
+            return hash >>> 0;
+        }
+
+        function selectDiverseProblemCases(candidates, subtag, limit = 5) {
+            const unique = [];
+            const seen = new Set();
+            candidates.forEach(problem => {
+                if (!hasExplicitProblemRemark(problem)) return;
+                const matchedRemark = extractRemarkForSubtag(problem, subtag);
+                if (!matchedRemark) return;
+                const key = `${normalizeProblemScript(problem)}|${normalizeProblemShot(problem)}|${matchedRemark}`;
+                if (seen.has(key)) return;
+                seen.add(key);
+                unique.push({ ...problem, description: matchedRemark, remark: matchedRemark });
+            });
+
+            const byScript = new Map();
+            unique.forEach(problem => {
+                const script = normalizeProblemScript(problem);
+                if (!byScript.has(script)) byScript.set(script, []);
+                byScript.get(script).push(problem);
+            });
+            const seed = seededHash(`${subtag?.name || ''}|${unique.map(item => normalizeProblemScript(item)).join('|')}`);
+            const groups = [...byScript.entries()]
+                .sort((a, b) => seededHash(`${seed}|${a[0]}`) - seededHash(`${seed}|${b[0]}`))
+                .map(([script, items]) => ({
+                    script,
+                    items: items.sort((a, b) => seededHash(`${seed}|${normalizeProblemShot(a)}|${normalizeProblemRemark(a)}`) - seededHash(`${seed}|${normalizeProblemShot(b)}|${normalizeProblemRemark(b)}`))
+                }));
+            const selected = [];
+            let round = 0;
+            while (selected.length < limit && groups.some(group => group.items[round])) {
+                groups.forEach(group => {
+                    if (selected.length < limit && group.items[round]) selected.push(group.items[round]);
+                });
+                round++;
+            }
+            return selected;
+        }
+
         function normalizeProblemSubtags(tag) {
             const source = tag.sub_tags || tag.subTags || tag.small_tags || [];
             const missingRemarkProblems = (tag.problems || []).filter(problem => !hasExplicitProblemRemark(problem));
@@ -8724,22 +8873,9 @@ ${keywordFilter}
                     problems: [...(item.problems || item.cases || [])]
                 }));
 
-                const used = new Set();
                 normalized.forEach(item => {
-                    item.problems = item.problems.filter(problem => {
-                        const key = `${normalizeProblemText(problem)}|${normalizeProblemScript(problem)}|${normalizeProblemShot(problem)}`;
-                        if (used.has(key)) return false;
-                        used.add(key);
-                        return true;
-                    }).slice(0, 5);
-
-                    for (const problem of candidatePool) {
-                        if (item.problems.length >= 5) break;
-                        const key = `${normalizeProblemText(problem)}|${normalizeProblemScript(problem)}|${normalizeProblemShot(problem)}`;
-                        if (used.has(key)) continue;
-                        used.add(key);
-                        item.problems.push(problem);
-                    }
+                    const preferred = [...item.problems, ...candidatePool];
+                    item.problems = selectDiverseProblemCases(preferred, item, 5);
                 });
                 if (missingRemarkProblems.length) {
                     normalized.push({
@@ -8773,7 +8909,7 @@ ${keywordFilter}
             const result = topGroups.map(([name, problems]) => ({
                 name,
                 count: problems.length,
-                problems: problems.slice(0, 5)
+                problems: selectDiverseProblemCases(problems, { name }, 5)
             }));
             if (missingRemarkProblems.length) {
                 result.push({
@@ -8783,19 +8919,9 @@ ${keywordFilter}
                 });
             }
 
-            const allocatedKeys = new Set();
-            result.forEach(item => item.problems.forEach(problem => {
-                allocatedKeys.add(`${normalizeProblemText(problem)}|${normalizeProblemScript(problem)}|${normalizeProblemShot(problem)}`);
-            }));
             result.forEach(item => {
                 if (item.name === '未填写备注') return;
-                for (const problem of uniqueProblems) {
-                    if (item.problems.length >= 5) break;
-                    const key = `${normalizeProblemText(problem)}|${normalizeProblemScript(problem)}|${normalizeProblemShot(problem)}`;
-                    if (allocatedKeys.has(key)) continue;
-                    allocatedKeys.add(key);
-                    item.problems.push(problem);
-                }
+                item.problems = selectDiverseProblemCases([...item.problems, ...uniqueProblems], item, 5);
             });
 
             return result;
