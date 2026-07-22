@@ -8774,6 +8774,7 @@ ${keywordFilter}
                 [/动作|姿态|行为|交互|推|拉|坐|站|走|跑|手势/, ['动作','姿态','行为','交互','推','拉','坐','站','走','跑','手','身体']],
                 [/情绪|表情|神态|哭|笑|紧张|夸张/, ['情绪','表情','神态','哭','笑','紧张','夸张','冷漠','激动']],
                 [/场景|背景|环境|空间|地点|走廊|医院|室内|室外/, ['场景','背景','环境','空间','地点','走廊','医院','室内','室外','门口']],
+                [/人物关系|角色关系|关系|互动关系/, ['关系','一起','亲','父亲','母亲','姐姐','哥哥','夫妻','情侣','暧昧','亲昵','陪同','朝向','面对']],
                 [/人物|角色|面部|五官|年龄|性别/, ['人物','角色','面部','五官','年龄','性别','脸']],
                 [/服装|衣服|穿着|道具|物体/, ['服装','衣服','穿','裙','道具','物体']],
                 [/台词|对白|语言|声音|口型/, ['台词','对白','语言','声音','口型','说话']],
@@ -8815,12 +8816,16 @@ ${keywordFilter}
             const seen = new Set();
             candidates.forEach(problem => {
                 if (!hasExplicitProblemRemark(problem)) return;
-                const matchedRemark = extractRemarkForSubtag(problem, subtag);
+                const fragments = splitRemarkIntoIssueFragments(normalizeProblemRemark(problem) || normalizeProblemText(problem));
+                const matchedRemark = extractRemarkForSubtag(problem, subtag)
+                    || (problem?.__allowSubtagFallback ? (fragments[0] || '') : '');
                 if (!matchedRemark) return;
                 const key = `${normalizeProblemScript(problem)}|${normalizeProblemShot(problem)}|${matchedRemark}`;
                 if (seen.has(key)) return;
                 seen.add(key);
-                unique.push({ ...problem, description: matchedRemark, remark: matchedRemark });
+                const normalizedProblem = { ...problem, description: matchedRemark, remark: matchedRemark };
+                delete normalizedProblem.__allowSubtagFallback;
+                unique.push(normalizedProblem);
             });
 
             const byScript = new Map();
@@ -8874,7 +8879,14 @@ ${keywordFilter}
                 }));
 
                 normalized.forEach(item => {
-                    const preferred = [...item.problems, ...candidatePool];
+                    // 模型已经明确分配到当前小问题的案例允许使用原文首个片段兜底，
+                    // 其余候选池仍必须通过语义关键词匹配，防止混入无关备注。
+                    const preferred = [
+                        ...item.problems.map(problem => typeof problem === 'object'
+                            ? ({ ...problem, __allowSubtagFallback: true })
+                            : ({ description: String(problem || ''), remark: String(problem || ''), __allowSubtagFallback: true })),
+                        ...candidatePool
+                    ];
                     item.problems = selectDiverseProblemCases(preferred, item, 5);
                 });
                 if (missingRemarkProblems.length) {
