@@ -5916,13 +5916,41 @@
                             bestScore = score;
                         }
                     });
-                    return { ...block, bestIndex };
+                    const headers = bestIndex >= 0
+                        ? parseCSVLine(block.rows[bestIndex]).map(value => String(value || '').trim())
+                        : [];
+                    return { ...block, bestIndex, headers };
                 }).filter(block => block.bestIndex >= 0);
 
                 if (scoredBlocks.length) {
-                    const baseHeaders = parseCSVLine(scoredBlocks[0].rows[scoredBlocks[0].bestIndex]).map(value => String(value || '').trim());
-                    const existingScriptIndex = findMetadataColumnIndex(baseHeaders, 'script');
-                    const mergedHeaders = existingScriptIndex >= 0 ? baseHeaders : [...baseHeaders, '剧本名'];
+                    // 不同剧本工作表的列数和列顺序可能不同。按标准化表头（含同名列序号）
+                    // 建立联合表头，禁止按第一张表的列位置硬拼，避免备注、提示词被错当成标签。
+                    const getHeaderKeys = headers => {
+                        const occurrences = new Map();
+                        return headers.map((header, index) => {
+                            const normalized = normalizeHeaderName(header);
+                            if (!normalized) return `__unnamed_${index}`;
+                            const occurrence = (occurrences.get(normalized) || 0) + 1;
+                            occurrences.set(normalized, occurrence);
+                            return `${normalized}#${occurrence}`;
+                        });
+                    };
+                    const mergedHeaders = [];
+                    const mergedIndexByKey = new Map();
+                    scoredBlocks.forEach(block => {
+                        block.headerKeys = getHeaderKeys(block.headers);
+                        block.headers.forEach((header, index) => {
+                            const key = block.headerKeys[index];
+                            if (!String(header || '').trim() || mergedIndexByKey.has(key)) return;
+                            mergedIndexByKey.set(key, mergedHeaders.length);
+                            mergedHeaders.push(header);
+                        });
+                    });
+                    let scriptIndex = findMetadataColumnIndex(mergedHeaders, 'script');
+                    if (scriptIndex < 0) {
+                        scriptIndex = mergedHeaders.length;
+                        mergedHeaders.push('剧本名');
+                    }
                     const encodeRow = values => values.map(value => {
                         const text = String(value ?? '');
                         return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
@@ -5933,13 +5961,18 @@
                         block.rows.slice(block.bestIndex + 1).forEach(record => {
                             const values = parseCSVLine(record);
                             if (!values.some(value => String(value || '').trim())) return;
-                            const normalizedRow = values.slice(0, baseHeaders.length);
-                            while (normalizedRow.length < baseHeaders.length) normalizedRow.push('');
-                            if (existingScriptIndex >= 0) {
-                                if (!String(normalizedRow[existingScriptIndex] || '').trim()) normalizedRow[existingScriptIndex] = block.name;
-                            } else {
-                                normalizedRow.push(block.name);
-                            }
+                            const normalizedRow = Array(mergedHeaders.length).fill('');
+                            block.headerKeys.forEach((key, sourceIndex) => {
+                                const targetIndex = mergedIndexByKey.get(key);
+                                if (targetIndex === undefined) return;
+                                normalizedRow[targetIndex] = values[sourceIndex] ?? '';
+                            });
+                            // 排除工作表中间再次出现的表头行。
+                            const repeatedHeaderCells = block.headers.reduce((count, header, index) => (
+                                normalizeHeaderName(values[index]) === normalizeHeaderName(header) ? count + 1 : count
+                            ), 0);
+                            if (repeatedHeaderCells >= Math.max(2, Math.ceil(block.headers.filter(Boolean).length * 0.6))) return;
+                            if (!String(normalizedRow[scriptIndex] || '').trim()) normalizedRow[scriptIndex] = block.name;
                             mergedRecords.push(encodeRow(normalizedRow));
                         });
                     });
@@ -8855,6 +8888,37 @@ ${keywordFilter}
         function normalizeProblemSubtags(tag) {
             const source = tag.sub_tags || tag.subTags || tag.small_tags || [];
             const missingRemarkProblems = (tag.problems || []).filter(problem => !hasExplicitProblemRemark(problem));
+            const isMissingRemarkSubtagName = value => /^(?:未填写备注|无备注|备注缺失|未备注|无)$/i.test(String(value || '').trim());
+            const isInvalidSubtagName = value => {
+                const name = String(value || '').trim();
+                return !name || /^(?:解析失败|未知错误|未知问题|空白|无数据)$/i.test(name);
+            };
+            const selectMissingRemarkCases = (problems, limit = 5) => {
+                const unique = [];
+                const seen = new Set();
+                problems.forEach(problem => {
+                    const key = `${normalizeProblemScript(problem)}|${normalizeProblemShot(problem)}`;
+                    if (seen.has(key)) return;
+                    seen.add(key);
+                    unique.push({ ...problem, description: '无', remark: '无' });
+                });
+                const groups = new Map();
+                unique.forEach(problem => {
+                    const script = normalizeProblemScript(problem);
+                    if (!groups.has(script)) groups.set(script, []);
+                    groups.get(script).push(problem);
+                });
+                const selected = [];
+                let round = 0;
+                const values = [...groups.values()];
+                while (selected.length < limit && values.some(group => group[round])) {
+                    values.forEach(group => {
+                        if (selected.length < limit && group[round]) selected.push(group[round]);
+                    });
+                    round++;
+                }
+                return selected;
+            };
             if (source.length) {
                 const candidatePool = [];
                 const candidateKeys = new Set();
@@ -8870,6 +8934,10 @@ ${keywordFilter}
                 });
 
                 const normalized = [...source]
+                    .filter(item => {
+                        const name = item?.name || item?.tag || item?.label || '';
+                        return !isInvalidSubtagName(name) && !isMissingRemarkSubtagName(name);
+                    })
                     .sort((a, b) => (Number(b.count) || b.problems?.length || b.cases?.length || 0) - (Number(a.count) || a.problems?.length || a.cases?.length || 0))
                     .slice(0, 3).map((item, index) => ({
                     name: item.name || item.tag || item.label || `问题类型${index + 1}`,
@@ -8893,7 +8961,7 @@ ${keywordFilter}
                     normalized.push({
                         name: '未填写备注',
                         count: missingRemarkProblems.length,
-                        problems: missingRemarkProblems.slice(0, 5)
+                        problems: selectMissingRemarkCases(missingRemarkProblems, 5)
                     });
                 }
                 return normalized;
@@ -8927,7 +8995,7 @@ ${keywordFilter}
                 result.push({
                     name: '未填写备注',
                     count: missingRemarkProblems.length,
-                    problems: missingRemarkProblems.slice(0, 5)
+                    problems: selectMissingRemarkCases(missingRemarkProblems, 5)
                 });
             }
 
@@ -8957,7 +9025,7 @@ ${keywordFilter}
         }
 
         function renderProblemDetailView(containerId, tag, index, primaryColor) {
-            const subtags = normalizeProblemSubtags(tag);
+            const subtags = normalizeProblemSubtags(tag).filter(item => String(item?.name || '').trim());
             const subtagsHtml = subtags.length
                 ? subtags.map((item, subIndex) => renderProblemSubtag(item, subIndex, tag.tag || '')).join('')
                 : '<div class="problem-empty-card">该标签暂无本维度的明确备注，暂不生成问题总结和案例</div>';
