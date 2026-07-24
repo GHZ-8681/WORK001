@@ -6084,7 +6084,7 @@
 4. 不要改写备注，不要返回备注全文，只返回案例ID；
 5. 数据不足5条时按实际数量返回，禁止虚构。
 6. 若备注包含“美学：……”“动作：……”等下一级标题，优先沿用该标题语义进行归类，且案例必须保留对应标题下的原始备注。
-7. 必须提供三层总结：dimension的summary总结该大维度整体特征；tag的summary总结该子维度；sub_tag的summary总结该小问题。每条总结60至150字，只能依据本层级备注，需说明主要现象、集中问题和影响，不得跨维度混用。
+7. 必须提供三层总结：dimension的summary总结该大维度整体特征；tag的summary总结该子维度；sub_tag的summary总结该小问题。每条总结60至150字，只能依据本层级备注，需说明数量、占本层级比例、主要现象、集中问题和影响，不得跨维度混用。
 8. overall_summary用150至300字比较三个大维度的主要差异并给出优先优化方向。
 ${keyword ? `仅分析包含关键词“${keyword}”的记录。` : ''}
 
@@ -9345,14 +9345,21 @@ ${keywordFilter}
                 const tagCount = Number(tag.count) || 0;
                 const tagPercentage = dimensionTotal > 0 ? (tagCount / dimensionTotal * 100).toFixed(1) : '0.0';
                 const subtags = normalizeProblemSubtags(tag).slice(0, 5);
-                const subRows = subtags.map((subTag, subIndex) => `
+                const visibleSubTotal = subtags.reduce((sum, item) => sum + (Number(item.count) || 0), 0);
+                const subRows = subtags.map((subTag, subIndex) => {
+                    const subCount = Number(subTag.count) || (subTag.problems || []).length;
+                    const subPercentage = subTag.percentage !== undefined
+                        ? Number(subTag.percentage).toFixed(1)
+                        : (visibleSubTotal > 0 ? (subCount / visibleSubTotal * 100).toFixed(1) : '0.0');
+                    return `
                     <button class="ai-dashboard-sub-row" type="button"
                         data-dashboard-sub="${dashboardId}-${tagIndex}-${subIndex}"
                         onclick="showDashboardDetail('${dashboardId}', ${tagIndex}, ${subIndex})">
                         <span>${escapeHtml(subTag.name || '未分类问题')}</span>
-                        <span>${Number(subTag.count) || (subTag.problems || []).length} 次</span>
+                        <span>${subCount} 次 · ${subPercentage}%</span>
                     </button>
-                `).join('');
+                `;
+                }).join('');
                 return `
                     <button class="ai-dashboard-rank-row" type="button"
                         data-dashboard-tag="${dashboardId}-${tagIndex}"
@@ -9378,13 +9385,20 @@ ${keywordFilter}
                 </div>
             `];
             (topTags || []).forEach((tag, tagIndex) => {
-                normalizeProblemSubtags(tag).slice(0, 5).forEach((subTag, subIndex) => {
-                    const subSummary = cleanSummaryText(subTag.summary) || buildLayerSummary(
+                const subtags = normalizeProblemSubtags(tag).slice(0, 5);
+                const visibleSubTotal = subtags.reduce((sum, item) => sum + (Number(item.count) || 0), 0);
+                subtags.forEach((subTag, subIndex) => {
+                    const subCount = Number(subTag.count) || (subTag.problems || []).length;
+                    const subPercentage = subTag.percentage !== undefined
+                        ? Number(subTag.percentage).toFixed(1)
+                        : (visibleSubTotal > 0 ? (subCount / visibleSubTotal * 100).toFixed(1) : '0.0');
+                    const summaryBody = cleanSummaryText(subTag.summary) || buildLayerSummary(
                         subTag.problems || [],
                         subTag.name === '未填写备注'
                             ? '该分类存在问题归因标签，但原表未填写对应备注。'
                             : `${subTag.name || '该问题'}暂无可提取的详细备注。`
                     );
+                    const subSummary = `该类共${subCount}次，占“${tag.tag || '当前大问题'}”全部问题的${subPercentage}%。${summaryBody}`;
                     panels.push(`
                         <div class="ai-dashboard-detail-panel" data-dashboard-detail-panel="${dashboardId}-${tagIndex}-${subIndex}">
                             <div class="ai-dashboard-detail-heading">
@@ -9448,7 +9462,8 @@ ${keywordFilter}
                 const dimensionFallback = topTagNames.length
                     ? `${dimensionName}共记录${dimensionTotal}次，主要集中在${topTagNames.join('、')}。${buildLayerSummary(dimensionProblems)}`
                     : `${dimensionName}暂无有效标签记录。`;
-                const dimensionSummary = cleanSummaryText(dimension.summary) || dimensionFallback;
+                const summaryBody = cleanSummaryText(dimension.summary) || dimensionFallback;
+                const dimensionSummary = `${dimensionName}共${dimensionTotal}次，占全部标签的${dimensionPercentage}%。${summaryBody}`;
                 const dashboardId = `ai_dashboard_${dimensionIndex}`;
                 const rankRows = renderDashboardTagTree(topTags, dimensionTotal, dashboardId);
                 const insightRows = renderDashboardDetailPanels(topTags, dimensionSummary, dashboardId);
