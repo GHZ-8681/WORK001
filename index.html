@@ -9045,15 +9045,19 @@ ${keywordFilter}
                         });
                     });
                 });
-                const classified = [...categoryGroups.entries()]
+                const allClassified = [...categoryGroups.entries()]
                     .filter(([, problems]) => problems.length > 0)
                     .map(([name, problems]) => ({
                         name,
                         count: problems.length,
                         problems: selectGroupedCases(problems, 5)
                     }))
-                    .sort((a, b) => b.count - a.count)
-                    .slice(0, 3);
+                    .sort((a, b) => b.count - a.count);
+                const classifiedTotal = allClassified.reduce((sum, item) => sum + item.count, 0);
+                const classified = allClassified.slice(0, 3).map(item => ({
+                    ...item,
+                    percentage: classifiedTotal > 0 ? (item.count / classifiedTotal * 100).toFixed(1) : '0.0'
+                }));
                 if (classified.length) return classified;
             }
             if (source.length) {
@@ -9187,11 +9191,14 @@ ${keywordFilter}
             const cases = (subtag.problems || []).slice(0, 5);
             const casesHtml = cases.map((problem, index) => renderProblemItem(problem, index, currentTag)).join('');
             const searchableText = `${subtag.name} ${cases.map(item => `${normalizeProblemText(item)} ${normalizeProblemScript(item)} ${normalizeProblemShot(item)}`).join(' ')}`;
+            const percentageText = subtag.percentage !== undefined && subtag.percentage !== null
+                ? ` · ${Number(subtag.percentage).toFixed(1)}%`
+                : '';
             return `
                 <section class="problem-subtag-card" data-problem-subtag data-search-text="${escapeHtml(searchableText.toLowerCase())}">
                     <div class="problem-subtag-toggle">
                         <span class="problem-subtag-name" title="${escapeHtml(subtag.name)}">${escapeHtml(subtag.name)}</span>
-                        <span class="problem-subtag-meta">${subtag.count || cases.length} 次 · ${cases.length}/5 个案例</span>
+                        <span class="problem-subtag-meta">${subtag.count || cases.length} 次${percentageText} · ${cases.length}/5 个案例</span>
                     </div>
                     <div class="problem-subtag-cases">
                         ${casesHtml || '<div class="problem-empty-card">该类型暂无可用案例</div>'}
